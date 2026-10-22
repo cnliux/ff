@@ -22,6 +22,8 @@ import com.github.catvod.crawler.DebugLogStore;
 import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.utils.Prefers;
 import com.github.catvod.utils.Json;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.github.catvod.utils.Trans;
 import com.google.gson.reflect.TypeToken;
 
