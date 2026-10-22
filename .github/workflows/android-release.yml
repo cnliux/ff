@@ -109,6 +109,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Artifact names may not contain '/', and a workflow_dispatch on a branch
+      # makes GITHUB_REF_NAME the branch name ("source/localization"). GitHub
+      # expressions have no replace() function, so sanitize it in the shell.
+      - name: Resolve artifact names
+        id: artifact
+        run: |
+          SAFE="${GITHUB_REF_NAME//\//-}"
+          echo "apks=webtv-apks-$SAFE" >> "$GITHUB_OUTPUT"
+          echo "mappings=webtv-mappings-$SAFE" >> "$GITHUB_OUTPUT"
+
       - name: Set up JDK 21
         uses: actions/setup-java@v5
         with:
@@ -412,7 +422,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: webtv-apks-${{ replace(github.ref_name, '/', '-') }}
+          name: ${{ steps.artifact.outputs.apks }}
           path: dist/*.apk
           if-no-files-found: error
           retention-days: 30
@@ -428,7 +438,7 @@ jobs:
         if: always() && inputs.build_type != 'Debug'
         uses: actions/upload-artifact@v4
         with:
-          name: webtv-mappings-${{ replace(github.ref_name, '/', '-') }}
+          name: ${{ steps.artifact.outputs.mappings }}
           path: app/build/outputs/mapping/*/mapping.txt
           if-no-files-found: error
           retention-days: 90
