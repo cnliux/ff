@@ -412,7 +412,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: webtv-apks-${{ github.ref_name }}
+          name: webtv-apks-${{ replace(github.ref_name, '/', '-') }}
           path: dist/*.apk
           if-no-files-found: error
           retention-days: 30
@@ -428,7 +428,7 @@ jobs:
         if: always() && inputs.build_type != 'Debug'
         uses: actions/upload-artifact@v4
         with:
-          name: webtv-mappings-${{ github.ref_name }}
+          name: webtv-mappings-${{ replace(github.ref_name, '/', '-') }}
           path: app/build/outputs/mapping/*/mapping.txt
           if-no-files-found: error
           retention-days: 90
