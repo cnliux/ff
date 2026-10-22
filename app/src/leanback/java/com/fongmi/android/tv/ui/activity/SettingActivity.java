@@ -39,6 +39,7 @@ import com.fongmi.android.tv.ui.dialog.HistoryDialog;
 import com.fongmi.android.tv.ui.dialog.LiveDialog;
 import com.fongmi.android.tv.ui.dialog.RestoreDialog;
 import com.fongmi.android.tv.ui.dialog.SiteBlockDialog;
+import com.fongmi.android.tv.ui.dialog.SiteSourceDialog;
 import com.fongmi.android.tv.ui.dialog.SiteDialog;
 import com.fongmi.android.tv.utils.ConfigImport;
 import com.fongmi.android.tv.utils.FileUtil;

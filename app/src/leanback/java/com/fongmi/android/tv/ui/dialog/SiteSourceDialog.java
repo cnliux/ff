@@ -10,7 +10,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
  */
 public class SiteSourceDialog {
 
-    public static void show(android.app.Activity activity) {
+    public static void show(androidx.fragment.app.FragmentActivity activity) {
         String[] items = {
                 activity.getString(R.string.source_manage_open_page),
                 activity.getString(R.string.source_manage_test_sort),

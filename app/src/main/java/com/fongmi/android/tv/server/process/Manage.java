@@ -1039,13 +1039,6 @@ public class Manage implements Process {
         return json(object);
     }
 
-    /**
-     * 导出 TVBox sites 格式（仅启用源），可供其他 TVBox 类软件使用。
-     */
-    private Response sourcesExportTvbox() throws Exception {
-        return sourcesExport();
-    }
-
     private Response sourcesReset() throws Exception {
         SourceSetting.reset();
         return sources(Map.of());
@@ -1247,7 +1240,7 @@ public class Manage implements Process {
 
     private String downloadSubscription(String url) throws Exception {
         try {
-            Response response = OkHttp.newCall(OkHttp.client(15000), url).execute();
+            okhttp3.Response response = OkHttp.newCall(OkHttp.client(15000), url).execute();
             if (!response.isSuccessful()) throw new Exception("下载失败：HTTP " + response.code());
             String body = response.body() == null ? "" : response.body().string();
             if (body.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 5 * 1024 * 1024) throw new Exception("订阅内容超过 5MB 限制");

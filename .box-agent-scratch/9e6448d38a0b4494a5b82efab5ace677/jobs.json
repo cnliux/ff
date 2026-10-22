@@ -1,0 +1,185 @@
+{
+  "total_count": 1,
+  "jobs": [
+    {
+      "id": 119973505294,
+      "run_id": 39821454018,
+      "workflow_name": "CI",
+      "head_branch": "source/localization",
+      "run_url": "https://api.github.com/repos/cnliux/ff/actions/runs/39821454018",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOVTvWrM8AAAAb7vppDg",
+      "head_sha": "9515bad2e5d1e77760958677e020fd2726606f76",
+      "url": "https://api.github.com/repos/cnliux/ff/actions/jobs/119973505294",
+      "html_url": "https://github.com/cnliux/ff/actions/runs/39821454018/job/119973505294",
+      "status": "completed",
+      "conclusion": "failure",
+      "created_at": "2026-10-22T17:18:23Z",
+      "started_at": "2026-10-22T17:18:25Z",
+      "completed_at": "2026-10-22T17:20:17Z",
+      "name": "Compile and unit tests",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-22T17:18:26Z",
+          "completed_at": "2026-10-22T17:18:28Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-22T17:18:28Z",
+          "completed_at": "2026-10-22T17:18:31Z"
+        },
+        {
+          "name": "Check release scripts",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-22T17:18:31Z",
+          "completed_at": "2026-10-22T17:18:31Z"
+        },
+        {
+          "name": "Set up JDK 21",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-22T17:18:31Z",
+          "completed_at": "2026-10-22T17:18:32Z"
+        },
+        {
+          "name": "Set up Android SDK",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-22T17:18:32Z",
+          "completed_at": "2026-10-22T17:18:50Z"
+        },
+        {
+          "name": "Write local.properties",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-22T17:18:50Z",
+          "completed_at": "2026-10-22T17:18:50Z"
+        },
+        {
+          "name": "Set up host Python 3.10 (Chaquopy v17 buildPython)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-22T17:18:50Z",
+          "completed_at": "2026-10-22T17:18:50Z"
+        },
+        {
+          "name": "Expose python3.10 for Chaquopy buildPython",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-10-22T17:18:50Z",
+          "completed_at": "2026-10-22T17:18:51Z"
+        },
+        {
+          "name": "Make gradlew executable",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-22T17:18:51Z",
+          "completed_at": "2026-10-22T17:18:51Z"
+        },
+        {
+          "name": "Compile TV and mobile",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 10,
+          "started_at": "2026-10-22T17:18:51Z",
+          "completed_at": "2026-10-22T17:20:13Z"
+        },
+        {
+          "name": "Run unit tests",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 11,
+          "started_at": "2026-10-22T17:20:13Z",
+          "completed_at": "2026-10-22T17:20:13Z"
+        },
+        {
+          "name": "Assemble debug APKs",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 12,
+          "started_at": "2026-10-22T17:20:13Z",
+          "completed_at": "2026-10-22T17:20:13Z"
+        },
+        {
+          "name": "Resolve artifact name",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 13,
+          "started_at": "2026-10-22T17:20:13Z",
+          "completed_at": "2026-10-22T17:20:13Z"
+        },
+        {
+          "name": "Upload debug APKs",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 14,
+          "started_at": "2026-10-22T17:20:13Z",
+          "completed_at": "2026-10-22T17:20:13Z"
+        },
+        {
+          "name": "Upload test reports",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-10-22T17:20:13Z",
+          "completed_at": "2026-10-22T17:20:13Z"
+        },
+        {
+          "name": "Post Set up host Python 3.10 (Chaquopy v17 buildPython)",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 28,
+          "started_at": "2026-10-22T17:20:13Z",
+          "completed_at": "2026-10-22T17:20:13Z"
+        },
+        {
+          "name": "Post Set up JDK 21",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 29,
+          "started_at": "2026-10-22T17:20:13Z",
+          "completed_at": "2026-10-22T17:20:14Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 30,
+          "started_at": "2026-10-22T17:20:14Z",
+          "completed_at": "2026-10-22T17:20:14Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 31,
+          "started_at": "2026-10-22T17:20:14Z",
+          "completed_at": "2026-10-22T17:20:14Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/cnliux/ff/check-runs/119973505294",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000006520,
+      "runner_name": "GitHub Actions 1000006520",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    }
+  ]
+}
