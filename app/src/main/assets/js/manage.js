@@ -54,6 +54,7 @@ let configFilter = 0;
 let editingConfig = null;
 let sourcesLoadedKey = '';
 let sourcesData = [];
+let sourceTarget = '';
 let sourcesManaged = false;
 let sourceTestResults = {};
 let pendingSourceAction = null;
@@ -2059,16 +2060,44 @@ function ensureActionTarget() {
 
 function loadSourcesManage(force = false) {
     if (sourcesLoadedKey === activeKey() && !force) return;
-    getJson('/manage/sources?' + targetQuery(force ? { refresh: '1' } : {}), data => {
+    getSource('/manage/sources?' + targetQuery(force ? { refresh: '1' } : {}), data => {
         sourcesLoadedKey = activeKey();
         applySourcesData(data);
     }, '源列表加载失败');
+}
+// 源管理支持多接口：所有源接口调用注入 target（接口地址），为空时是当前启用接口
+function getSource(path, ok, fail) {
+    return getJson(path + (path.includes('?') ? '&' : '?') + 'target=' + encodeURIComponent(sourceTarget || ''), ok, fail);
+}
+function postSource(path, params, ok, fail) {
+    return postJson(path, { target: sourceTarget || '', ...(params || {}) }, ok, fail);
+}
+function renderSourceTargets(configs) {
+    const items = Array.isArray(configs) ? configs : [];
+    if (!items.length) return;
+    const current = items.find(item => item.current) || {};
+    const html = items.map(item =>
+        `<option value="${escHtml(item.url || '')}"${item.url === sourceTarget ? ' selected' : ''}>${escHtml(item.name || item.url || '')}${item.managed ? '（已接管）' : ''}${item.current ? '（当前）' : ''}</option>`
+    ).join('');
+    if (!$('#sourceTargetSelect').length) {
+        $('#sourcesSummary').after('<div class="card-line" style="margin-top:8px"><select id="sourceTargetSelect" class="md-input" onchange="changeSourceTarget(this.value)">' + html + '</select></div>');
+    } else {
+        $('#sourceTargetSelect').html(html);
+    }
+    if (!sourceTarget) sourceTarget = current.url || '';
+}
+function changeSourceTarget(url) {
+    sourceTarget = url || '';
+    sourcesLoadedKey = '';
+    sourceTestResults = {};
+    loadSourcesManage(true);
 }
 function applySourcesData(data) {
     if (!data) return;
     sourcesData = Array.isArray(data.items) ? data.items : [];
     sourcesManaged = !!data.managed;
     sourcesLoadedKey = activeKey();
+    renderSourceTargets(data.configs);
     renderSourcesManage();
 }
 function renderSourcesManage() {
@@ -2115,13 +2144,13 @@ function moveSource(index, delta) {
     const items = sourcesData.slice();
     items.splice(to, 0, items.splice(index, 1)[0]);
     const order = items.map(item => item.key).join(',');
-    postJson('/manage/sources/order', { order }, data => {
+    postSource('/manage/sources/order', { order }, data => {
         applySourcesData(data);
         warnToast('顺序已保存');
     }, '排序保存失败');
 }
 function deleteSource(key) {
-    postJson('/manage/sources/delete', { key }, data => {
+    postSource('/manage/sources/delete', { key }, data => {
         delete sourceTestResults[key];
         applySourcesData(data);
         warnToast('源已删除');
@@ -2141,7 +2170,7 @@ function setAllSources(off) {
 }
 function testAllSourcesAuto() {
     warnToast('测速中，完成后自动排序');
-    postJson('/manage/sources/test', { auto: '1' }, data => {
+    postSource('/manage/sources/test', { auto: '1' }, data => {
         sourceTestResults = {};
         (Array.isArray(data.items) ? data.items : []).forEach(item => { sourceTestResults[item.key] = item; });
         loadSourcesManage(true);
@@ -2155,13 +2184,13 @@ function cleanInvalidSources(mode) {
     }, '操作失败');
 }
 function deleteDuplicateSources() {
-    postJson('/manage/sources/delete-duplicate', {}, data => {
+    postSource('/manage/sources/delete-duplicate', {}, data => {
         applySourcesData(data);
         warnToast('已按地址去重');
     }, '操作失败');
 }
 function exportSourcesTvbox() {
-    postJson('/manage/sources/export', { t: 'tvbox' }, data => {
+    postSource('/manage/sources/export', { t: 'tvbox' }, data => {
         const content = data && data.content ? data.content : '';
         if (!content) { warnToast('没有可导出的站源'); return; }
         const blob = new Blob([content], { type: 'application/json;charset=utf-8' });
@@ -2177,7 +2206,7 @@ function exportSourcesTvbox() {
     }, '导出失败');
 }
 function loadSubscriptions() {
-    getJson('/manage/sources/subscription/list', data => {
+    getSource('/manage/sources/subscription/list', data => {
         const items = Array.isArray(data.items) ? data.items : [];
         $('#subscriptionList').html(items.map(buildSubscriptionCard).join('') || '<div class="empty-state">暂无订阅</div>');
     }, '订阅读取失败');
@@ -2200,7 +2229,7 @@ function importSubscription() {
     const url = ($('#subscriptionImportUrl').val() || '').trim();
     if (!url) { warnToast('请输入订阅地址'); return; }
     warnToast('正在导入订阅');
-    postJson('/manage/sources/subscription/import', { url }, () => {
+    postSource('/manage/sources/subscription/import', { url }, () => {
         $('#subscriptionImportUrl').val('');
         loadSubscriptions();
         loadSourcesManage(true);
@@ -2209,7 +2238,7 @@ function importSubscription() {
 }
 function updateSubscription(id) {
     warnToast('正在更新订阅');
-    postJson('/manage/sources/subscription/update', { id }, () => {
+    postSource('/manage/sources/subscription/update', { id }, () => {
         loadSubscriptions();
         loadSourcesManage(true);
         warnToast('订阅已更新');
@@ -2217,7 +2246,7 @@ function updateSubscription(id) {
 }
 function updateAllSubscriptions() {
     warnToast('正在更新全部订阅');
-    postJson('/manage/sources/subscription/update-all', {}, () => {
+    postSource('/manage/sources/subscription/update-all', {}, () => {
         loadSubscriptions();
         loadSourcesManage(true);
         warnToast('全部订阅已更新');
@@ -2225,7 +2254,7 @@ function updateAllSubscriptions() {
 }
 function deleteSubscription(id) {
     showSourceConfirm('移除订阅', '确定移除该订阅及其名下独占的源吗？', () => {
-        postJson('/manage/sources/subscription/delete', { id }, () => {
+        postSource('/manage/sources/subscription/delete', { id }, () => {
             loadSubscriptions();
             loadSourcesManage(true);
             warnToast('订阅已移除');
@@ -2235,7 +2264,7 @@ function deleteSubscription(id) {
 function deleteAllSources() {
     if (!sourcesData.length) { warnToast('当前没有站源'); return; }
     showSourceConfirm('删除全部站源', `确定删除全部 ${sourcesData.length} 个站源吗？删除后可用“恢复接口原始源”还原。`, () => {
-        postJson('/manage/sources/delete-all', {}, data => {
+        postSource('/manage/sources/delete-all', {}, data => {
             sourceTestResults = {};
             applySourcesData(data);
             warnToast('已删除全部站源');
@@ -2244,7 +2273,7 @@ function deleteAllSources() {
 }
 function resetSources() {
     showSourceConfirm('恢复接口原始源', '确定恢复接口原始源吗？本地改动将被清除。', () => {
-        postJson('/manage/sources/reset', {}, data => {
+        postSource('/manage/sources/reset', {}, data => {
             sourceTestResults = {};
             applySourcesData(data);
             warnToast('已恢复接口原始源');
@@ -2264,7 +2293,7 @@ function confirmSourceAction(yes) {
     if (yes && action) action();
 }
 function exportSources() {
-    postJson('/manage/sources/export', {}, data => {
+    postSource('/manage/sources/export', {}, data => {
         const content = data && data.content ? data.content : '';
         if (!content) { warnToast('没有可导出的站源'); return; }
         const blob = new Blob([content], { type: 'application/json;charset=utf-8' });
@@ -2303,7 +2332,7 @@ function confirmSourceImport() {
     const url = $('#sourceImportUrl').val().trim();
     if (!content && !url) { warnToast('请填写站源内容或接口地址'); return; }
     const replace = $('#sourceImportReplace').is(':checked');
-    postJson('/manage/sources/import', { content, url, replace: replace ? '1' : '0' }, data => {
+    postSource('/manage/sources/import', { content, url, replace: replace ? '1' : '0' }, data => {
         sourceTestResults = {};
         applySourcesData(data);
         closeDialog('sourceImportDialog');
@@ -2311,14 +2340,14 @@ function confirmSourceImport() {
     }, '导入失败');
 }
 function testSource(key) {
-    postJson('/manage/sources/test', { key }, data => {
+    postSource('/manage/sources/test', { key }, data => {
         applySourceTestResults(data);
         warnToast('测速完成');
     }, '测速失败', SOURCE_TEST_TIMEOUT);
 }
 function testAllSources() {
     if (!sourcesData.length) { warnToast('当前没有站源'); return; }
-    postJson('/manage/sources/test', {}, data => {
+    postSource('/manage/sources/test', {}, data => {
         applySourceTestResults(data);
         warnToast('测速完成');
     }, '测速失败', SOURCE_TEST_TIMEOUT);

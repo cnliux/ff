@@ -120,17 +120,17 @@ public class Manage implements Process {
                 case "/manage/sources" -> sources(session.getParms());
                 case "/manage/sources/import" -> sourcesImport(session.getParms());
                 case "/manage/sources/delete" -> sourcesDelete(session.getParms());
-                case "/manage/sources/delete-all" -> sourcesDeleteAll();
+                case "/manage/sources/delete-all" -> sourcesDeleteAll(session.getParms());
                 case "/manage/sources/order" -> sourcesOrder(session.getParms());
                 case "/manage/sources/export" -> sourcesExport(session.getParms());
                 case "/manage/sources/test" -> sourcesTest(session.getParms());
                 case "/manage/sources/reset" -> sourcesReset();
                 case "/manage/sources/enable" -> sourcesSetOff(session.getParms(), false);
                 case "/manage/sources/disable" -> sourcesSetOff(session.getParms(), true);
-                case "/manage/sources/enable-all" -> sourcesSetOffAll(false);
-                case "/manage/sources/disable-all" -> sourcesSetOffAll(true);
-                case "/manage/sources/block-invalid" -> sourcesBlockInvalid();
-                case "/manage/sources/delete-invalid" -> sourcesDeleteInvalid();
+                case "/manage/sources/enable-all" -> sourcesSetOffAll(session.getParms(), false);
+                case "/manage/sources/disable-all" -> sourcesSetOffAll(session.getParms(), true);
+                case "/manage/sources/block-invalid" -> sourcesSetOffInvalid(session.getParms(), true);
+                case "/manage/sources/delete-invalid" -> sourcesSetOffInvalid(session.getParms(), false);
                 case "/manage/sources/delete-duplicate" -> sourcesDeleteDuplicate();
                 case "/manage/sources/subscription/import" -> sourcesSubscriptionImport(session.getParms());
                 case "/manage/sources/subscription/list" -> sourcesSubscriptionList();
@@ -972,18 +972,41 @@ public class Manage implements Process {
     private Response sources(Map<String, String> params) {
         try {
             if (bool(params.get("refresh"), false)) SourceSetting.clearCache();
-            JsonArray items = SourceSetting.sites();
-            Config config = SourceSetting.config();
+            String target = params.getOrDefault("target", "").trim();
+            JsonArray items = SourceSetting.sites(target);
+            Config config = SourceSetting.config(target);
             JsonObject object = new JsonObject();
             object.addProperty("configUrl", config.getUrl());
             object.addProperty("configName", config.getName());
-            object.addProperty("managed", SourceSetting.isManaged());
+            object.addProperty("managed", SourceSetting.isManaged(target));
             object.addProperty("count", items.size());
             object.add("items", SourceSetting.summary(items));
+            object.add("configs", configsList());
             return json(object);
         } catch (Exception e) {
             return Nano.error(Status.BAD_REQUEST, message(e));
         }
+    }
+
+    /**
+     * 已保存的接口列表，供前端选择要管理的目标接口。
+     */
+    private JsonArray configsList() {
+        JsonArray result = new JsonArray();
+        try {
+            String current = SourceSetting.config().getUrl();
+            for (Config item : Config.getAll(0)) {
+                if (TextUtils.isEmpty(item.getUrl())) continue;
+                JsonObject object = new JsonObject();
+                object.addProperty("url", item.getUrl());
+                object.addProperty("name", item.getName());
+                object.addProperty("current", item.getUrl().equals(current));
+                object.addProperty("managed", !TextUtils.isEmpty(item.getJson()));
+                result.add(object);
+            }
+        } catch (Exception ignored) {
+        }
+        return result;
     }
 
     private Response sourcesImport(Map<String, String> params) throws Exception {
@@ -993,23 +1016,26 @@ public class Manage implements Process {
         JsonArray incoming = SourceSetting.parse(content);
         if (incoming.size() == 0) return Nano.error(Status.BAD_REQUEST, "没有解析到站源");
         boolean replace = bool(params.get("replace"), false);
-        JsonObject root = SourceSetting.configJson();
-        SourceSetting.apply(root, SourceSetting.merge(SourceSetting.sites(root), incoming, replace));
-        return sources(Map.of());
+        String target = params.getOrDefault("target", "").trim();
+        JsonObject root = SourceSetting.configJson(target);
+        SourceSetting.apply(target, root, SourceSetting.merge(SourceSetting.sites(target), incoming, replace));
+        return sources(Map.of("target", target));
     }
 
     private Response sourcesDelete(Map<String, String> params) throws Exception {
         String key = params.getOrDefault("key", "").trim();
         if (TextUtils.isEmpty(key)) return Nano.error(Status.BAD_REQUEST, "Missing key");
-        JsonObject root = SourceSetting.configJson();
-        SourceSetting.apply(root, SourceSetting.remove(SourceSetting.sites(root), key));
-        return sources(Map.of());
+        String target = params.getOrDefault("target", "").trim();
+        JsonObject root = SourceSetting.configJson(target);
+        SourceSetting.apply(target, root, SourceSetting.remove(SourceSetting.sites(target), key));
+        return sources(Map.of("target", target));
     }
 
-    private Response sourcesDeleteAll() throws Exception {
-        JsonObject root = SourceSetting.configJson();
-        SourceSetting.apply(root, new JsonArray());
-        return sources(Map.of());
+    private Response sourcesDeleteAll(Map<String, String> params) throws Exception {
+        String target = params.getOrDefault("target", "").trim();
+        JsonObject root = SourceSetting.configJson(target);
+        SourceSetting.apply(target, root, new JsonArray());
+        return sources(Map.of("target", target));
     }
 
     private Response sourcesOrder(Map<String, String> params) throws Exception {
@@ -1018,16 +1044,18 @@ public class Manage implements Process {
         for (String key : order.split(",")) {
             if (!TextUtils.isEmpty(key.trim())) keys.add(key.trim());
         }
-        JsonObject root = SourceSetting.configJson();
-        SourceSetting.apply(root, SourceSetting.reorder(SourceSetting.sites(root), keys));
-        return sources(Map.of());
+        String target = params.getOrDefault("target", "").trim();
+        JsonObject root = SourceSetting.configJson(target);
+        SourceSetting.apply(target, root, SourceSetting.reorder(SourceSetting.sites(target), keys));
+        return sources(Map.of("target", target));
     }
 
     private Response sourcesExport(Map<String, String> params) throws Exception {
-        JsonArray sites = SourceSetting.enabledOnly();
+        String target = params.getOrDefault("target", "").trim();
+        JsonArray sites = SourceSetting.enabledOnly(target);
         JsonObject root = new JsonObject();
         root.add("sites", sites);
-        Config config = SourceSetting.config();
+        Config config = SourceSetting.config(target);
         String name = config.getName();
         if (!TextUtils.isEmpty(name)) name = name.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
         if (name.length() > 40) name = name.substring(0, 40);
@@ -1039,9 +1067,10 @@ public class Manage implements Process {
         return json(object);
     }
 
-    private Response sourcesReset() throws Exception {
-        SourceSetting.reset();
-        return sources(Map.of());
+    private Response sourcesReset(Map<String, String> params) throws Exception {
+        String target = params.getOrDefault("target", "").trim();
+        SourceSetting.reset(target);
+        return sources(Map.of("target", target));
     }
 
     /**
@@ -1050,40 +1079,29 @@ public class Manage implements Process {
     private Response sourcesSetOff(Map<String, String> params, boolean off) throws Exception {
         String key = params.getOrDefault("key", "").trim();
         if (TextUtils.isEmpty(key)) return Nano.error(Status.BAD_REQUEST, "Missing key");
-        JsonObject root = SourceSetting.configJson();
-        SourceSetting.apply(root, SourceSetting.setOff(SourceSetting.sites(root), List.of(key), off));
-        return sources(Map.of());
+        String target = params.getOrDefault("target", "").trim();
+        JsonObject root = SourceSetting.configJson(target);
+        SourceSetting.apply(target, root, SourceSetting.setOff(SourceSetting.sites(target), List.of(key), off));
+        return sources(Map.of("target", target));
     }
 
     /**
      * 全部启用 / 全部停用。
      */
-    private Response sourcesSetOffAll(boolean off) throws Exception {
-        JsonObject root = SourceSetting.configJson();
-        JsonArray sites = SourceSetting.sites(root);
+    private Response sourcesSetOffAll(Map<String, String> params, boolean off) throws Exception {
+        String target = params.getOrDefault("target", "").trim();
+        JsonObject root = SourceSetting.configJson(target);
+        JsonArray sites = SourceSetting.sites(target);
         List<String> keys = new ArrayList<>();
         for (String key : SourceSetting.keys(sites)) keys.add(key);
-        SourceSetting.apply(root, SourceSetting.setOff(sites, keys, off));
-        return sources(Map.of());
+        SourceSetting.apply(target, root, SourceSetting.setOff(sites, keys, off));
+        return sources(Map.of("target", target));
     }
 
-    /**
-     * 屏蔽无效：现场测速后停用所有失败的源。
-     */
-    private Response sourcesBlockInvalid() throws Exception {
-        return sourcesSetOffInvalid(true);
-    }
-
-    /**
-     * 删除无效：现场测速后删除所有失败的源。
-     */
-    private Response sourcesDeleteInvalid() throws Exception {
-        return sourcesSetOffInvalid(false);
-    }
-
-    private Response sourcesSetOffInvalid(boolean off) throws Exception {
-        JsonObject root = SourceSetting.configJson();
-        JsonArray sites = SourceSetting.sites(root);
+    private Response sourcesSetOffInvalid(Map<String, String> params, boolean off) throws Exception {
+        String target = params.getOrDefault("target", "").trim();
+        JsonObject root = SourceSetting.configJson(target);
+        JsonArray sites = SourceSetting.sites(target);
         JsonArray tested = SourceSetting.test(sites, 4000);
         List<String> keys = new ArrayList<>();
         for (JsonElement element : tested) {
@@ -1095,24 +1113,26 @@ public class Manage implements Process {
             for (String key : keys) current = SourceSetting.remove(current, key);
         }
         JsonArray result = off ? SourceSetting.setOff(sites, keys, true) : current;
-        SourceSetting.apply(root, result);
-        return sources(Map.of());
+        SourceSetting.apply(target, root, result);
+        return sources(Map.of("target", target));
     }
 
     /**
      * 按 api 地址去重，保留第一个。
      */
-    private Response sourcesDeleteDuplicate() throws Exception {
-        JsonObject root = SourceSetting.configJson();
-        SourceSetting.apply(root, SourceSetting.dedupeByApi(SourceSetting.sites(root)));
-        return sources(Map.of());
+    private Response sourcesDeleteDuplicate(Map<String, String> params) throws Exception {
+        String target = params.getOrDefault("target", "").trim();
+        JsonObject root = SourceSetting.configJson(target);
+        SourceSetting.apply(target, root, SourceSetting.dedupeByApi(SourceSetting.sites(target)));
+        return sources(Map.of("target", target));
     }
 
     /**
      * 测速并可选按 快→慢→失败→未测速 自动排序持久化。
      */
     private Response sourcesTest(Map<String, String> params) throws Exception {
-        JsonArray sites = SourceSetting.sites();
+        String target = params.getOrDefault("target", "").trim();
+        JsonArray sites = SourceSetting.sites(target);
         String key = params.getOrDefault("key", "").trim();
         if (!TextUtils.isEmpty(key)) {
             JsonArray filtered = new JsonArray();
@@ -1134,8 +1154,8 @@ public class Manage implements Process {
                 JsonObject item = element.getAsJsonObject();
                 if ("fail".equals(Json.safeString(item, "state"))) keys.add(Json.safeString(item, "key"));
             }
-            JsonObject root = SourceSetting.configJson();
-            SourceSetting.apply(root, SourceSetting.reorder(SourceSetting.sites(root), keys));
+            JsonObject root = SourceSetting.configJson(target);
+            SourceSetting.apply(target, root, SourceSetting.reorder(SourceSetting.sites(target), keys));
         }
         JsonObject object = new JsonObject();
         object.addProperty("count", tested.size());

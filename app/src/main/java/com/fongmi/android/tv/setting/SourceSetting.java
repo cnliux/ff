@@ -48,8 +48,24 @@ public class SourceSetting {
         return VodConfig.get().getConfig();
     }
 
+    /**
+     * 按接口地址取目标接口配置：target 为空时是当前启用接口；否则从已保存的接口列表中查找，不切换当前启用接口。
+     */
+    public static Config config(String target) throws Exception {
+        if (TextUtils.isEmpty(target)) return config();
+        if (target.equals(config().getUrl())) return config();
+        for (Config item : Config.getAll(0)) if (target.equals(item.getUrl())) return item;
+        Config found = Config.find(target, 0);
+        if (found != null && !TextUtils.isEmpty(found.getUrl())) return found;
+        throw new Exception("未找到该接口，请先在“接口”中添加");
+    }
+
     public static boolean isManaged() {
         return !TextUtils.isEmpty(config().getJson());
+    }
+
+    public static boolean isManaged(String target) throws Exception {
+        return !TextUtils.isEmpty(config(target).getJson());
     }
 
     /**
@@ -64,7 +80,14 @@ public class SourceSetting {
      * 读取当前接口配置内容，优先使用本地保存的版本。
      */
     public static JsonObject configJson() throws Exception {
-        Config config = config();
+        return configJson("");
+    }
+
+    /**
+     * 读取目标接口配置内容，优先使用本地保存的版本。
+     */
+    public static JsonObject configJson(String target) throws Exception {
+        Config config = config(target);
         if (config.isEmpty()) throw new Exception("当前没有启用影视接口");
         String text = config.getJson();
         if (TextUtils.isEmpty(text)) {
@@ -89,7 +112,14 @@ public class SourceSetting {
      * 当前接口的站源列表，保留原始 JSON 以便导出时不丢字段。
      */
     public static JsonArray sites() throws Exception {
-        return sites(configJson());
+        return sites("");
+    }
+
+    /**
+     * 目标接口的站源列表，保留原始 JSON 以便导出时不丢字段。
+     */
+    public static JsonArray sites(String target) throws Exception {
+        return sites(configJson(target));
     }
 
     /**
@@ -260,7 +290,11 @@ public class SourceSetting {
      * 当前接口的启用（非停用）站源列表。
      */
     public static JsonArray enabledOnly() throws Exception {
-        return filterEnabled(sites());
+        return enabledOnly("");
+    }
+
+    public static JsonArray enabledOnly(String target) throws Exception {
+        return filterEnabled(sites(target));
     }
 
     /**
@@ -316,27 +350,47 @@ public class SourceSetting {
         apply(configJson(), sites);
     }
 
+    public static void apply(JsonArray sites) throws Exception {
+        apply("", sites);
+    }
+
+    public static void apply(String target, JsonArray sites) throws Exception {
+        apply(target, configJson(target), sites);
+    }
+
     /**
      * 保存站源并重新加载接口配置，复用已读取的接口内容避免重复下载。
      */
     public static void apply(JsonObject object, JsonArray sites) throws Exception {
-        Config config = config();
+        apply("", object, sites);
+    }
+
+    /**
+     * 保存站源并重新加载接口配置，复用已读取的接口内容避免重复下载。
+     * target 指向非当前接口时仅保存该接口的源数据，不切换当前启用接口。
+     */
+    public static void apply(String target, JsonObject object, JsonArray sites) throws Exception {
+        Config config = config(target);
         object.add(SITES, sites);
         config.setJson(object.toString());
         config.save();
         clearCache();
-        reload(config);
+        if (TextUtils.isEmpty(target) || target.equals(config().getUrl())) reload(config);
     }
 
     /**
      * 清除本地保存的站源，恢复接口原始配置。
      */
     public static void reset() throws Exception {
-        Config config = config();
+        reset("");
+    }
+
+    public static void reset(String target) throws Exception {
+        Config config = config(target);
         config.setJson(null);
         config.save();
         clearCache();
-        reload(config);
+        if (TextUtils.isEmpty(target) || target.equals(config().getUrl())) reload(config);
     }
 
     /**
@@ -345,6 +399,18 @@ public class SourceSetting {
     public static JsonArray test(JsonArray sites, long timeout) {
         JsonArray result = new JsonArray();
         if (sites == null || sites.isEmpty()) return result;
+        // 带 jar 的 csp_ 爬虫源：解析出真实 jar 地址再测速
+        String base = "";
+        String spider = "";
+        try {
+            Config config = config();
+            if (!config.isEmpty()) {
+                base = config.getUrl();
+                spider = Json.safeString(configJson(), "spider");
+            }
+        } catch (Exception ignored) {
+        }
+        String globalSpider = spider;
         int size = sites.size();
         ExecutorService pool = Executors.newFixedThreadPool(Math.min(TEST_THREADS, size));
         OkHttpClient client = OkHttp.client(timeout);
@@ -355,7 +421,7 @@ public class SourceSetting {
                 if (!element.isJsonObject()) continue;
                 JsonObject site = element.getAsJsonObject();
                 items.add(site);
-                futures.add(pool.submit(() -> probe(client, site)));
+                futures.add(pool.submit(() -> probe(client, site, base, globalSpider)));
             }
             for (int i = 0; i < futures.size(); i++) {
                 try {
@@ -382,10 +448,10 @@ public class SourceSetting {
         }));
     }
 
-    private static JsonObject probe(OkHttpClient client, JsonObject site) {
+    private static JsonObject probe(OkHttpClient client, JsonObject site, String base, String globalSpider) {
         String key = Json.safeString(site, KEY);
         String name = Json.safeString(site, NAME);
-        String url = probeUrl(site);
+        String url = probeUrl(site, base, globalSpider);
         JsonObject item = new JsonObject();
         item.addProperty(KEY, key);
         item.addProperty(NAME, name.isEmpty() ? key : name);
@@ -411,11 +477,35 @@ public class SourceSetting {
     }
 
     private static String probeUrl(JsonObject site) {
+        return probeUrl(site, "", "");
+    }
+
+    /**
+     * 测速地址选择：优先 http api；csp_ 爬虫源解析相对路径 jar / 回退全局 spider，assets 本地 jar 跳过。
+     */
+    private static String probeUrl(JsonObject site, String base, String globalSpider) {
         String api = Json.safeString(site, "api");
         if (isHttp(api)) return api;
-        String jar = Json.safeString(site, "jar");
+        String jar = resolveJar(Json.safeString(site, "jar"), base);
+        if (!TextUtils.isEmpty(jar)) return jar;
+        return resolveJar(globalSpider, base);
+    }
+
+    /**
+     * 把 jar 地址解析为可测速的 http 地址：相对路径按接口地址解析，assets/data 本地地址返回空。
+     */
+    private static String resolveJar(String jar, String base) {
+        if (TextUtils.isEmpty(jar)) return "";
+        jar = jar.trim();
+        if (jar.startsWith("assets://") || jar.startsWith("data:") || jar.startsWith("asset://")) return "";
         if (isHttp(jar)) return jar;
-        return "";
+        if (TextUtils.isEmpty(base)) return "";
+        try {
+            String resolved = UrlUtil.resolve(base, jar);
+            return isHttp(resolved) ? resolved : "";
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     private static boolean isHttp(String url) {
