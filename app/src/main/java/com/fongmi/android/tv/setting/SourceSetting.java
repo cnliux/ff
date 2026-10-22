@@ -395,22 +395,9 @@ public class SourceSetting {
     public static JsonArray test(JsonArray sites, long timeout) {
         JsonArray result = new JsonArray();
         if (sites == null || sites.isEmpty()) return result;
-        // 带 jar 的 csp_ 爬虫源：解析出真实 jar 地址再测速（lambda 引用需 final）
-        final String base;
-        final String globalSpider;
-        try {
-            Config config = config();
-            if (!config.isEmpty()) {
-                base = config.getUrl();
-                globalSpider = Json.safeString(configJson(), "spider");
-            } else {
-                base = "";
-                globalSpider = "";
-            }
-        } catch (Exception e) {
-            base = "";
-            globalSpider = "";
-        }
+        // 带 jar 的 csp_ 爬虫源：解析出真实 jar 地址再测速（lambda 引用需 effectively final）
+        final String base = currentBaseUrl();
+        final String globalSpider = currentGlobalSpider();
         int size = sites.size();
         ExecutorService pool = Executors.newFixedThreadPool(Math.min(TEST_THREADS, size));
         OkHttpClient client = OkHttp.client(timeout);
@@ -441,6 +428,29 @@ public class SourceSetting {
             pool.shutdownNow();
         }
         return result;
+    }
+
+    /**
+     * 当前启用接口的地址，用于解析相对路径 jar；无接口时返回空。
+     */
+    private static String currentBaseUrl() {
+        try {
+            Config config = config();
+            return config.isEmpty() ? "" : config.getUrl();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /**
+     * 当前接口配置的全局 spider 地址，用于无 jar 字段的 csp_ 源回退测速。
+     */
+    private static String currentGlobalSpider() {
+        try {
+            return Json.safeString(configJson(), "spider");
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     private static void reload(Config config) {
