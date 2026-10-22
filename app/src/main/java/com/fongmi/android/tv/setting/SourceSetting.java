@@ -395,18 +395,22 @@ public class SourceSetting {
     public static JsonArray test(JsonArray sites, long timeout) {
         JsonArray result = new JsonArray();
         if (sites == null || sites.isEmpty()) return result;
-        // 带 jar 的 csp_ 爬虫源：解析出真实 jar 地址再测速
-        String base = "";
-        String spider = "";
+        // 带 jar 的 csp_ 爬虫源：解析出真实 jar 地址再测速（lambda 引用需 final）
+        final String base;
+        final String globalSpider;
         try {
             Config config = config();
             if (!config.isEmpty()) {
                 base = config.getUrl();
-                spider = Json.safeString(configJson(), "spider");
+                globalSpider = Json.safeString(configJson(), "spider");
+            } else {
+                base = "";
+                globalSpider = "";
             }
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            base = "";
+            globalSpider = "";
         }
-        String globalSpider = spider;
         int size = sites.size();
         ExecutorService pool = Executors.newFixedThreadPool(Math.min(TEST_THREADS, size));
         OkHttpClient client = OkHttp.client(timeout);
