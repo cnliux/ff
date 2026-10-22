@@ -1,0 +1,109 @@
+name: CNB source mirror
+
+# 把本仓库的全部源码引用（所有分支 + 所有标签）镜像到 CNB 的 code_free/webtv-coding，
+# 与 APK 镜像仓库 code_free/webtv 是两个独立仓库，互不影响。
+#
+# 触发策略：
+#   - push 到 main / 推送 v* 标签 —— 即时同步（绝大多数改动发生的地方）
+#   - 每天一次定时兜底        —— 收拢只在特性分支上的改动
+#   - 手动 workflow_dispatch  —— 需要立刻对齐时用
+#
+# ⚠️ 语义是「只快进，不强制覆盖」：
+#   GitHub 是唯一可写源，CNB 侧是只读镜像。若 CNB 上出现 GitHub 没有的提交
+#   （有人在 CNB 侧直接开发 / 用 NPC 开分支合并），本工作流会**拒绝同步并报错**，
+#   而不是把它静默回滚掉。历史上用 `git push --mirror` 会反手把 CNB 的 main
+#   回滚到 GitHub 的版本、并删掉 refs/pull/*、refs/notes/*，造成过实际的数据丢失。
+#
+#   另一侧的取舍：分支在 GitHub 上被删除时，CNB 侧会保留（不做 prune），
+#   宁可留残留也不误删 —— 需要清理时手工执行。
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  schedule:
+    - cron: "40 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cnb-source-mirror
+  cancel-in-progress: false
+
+env:
+  CNB_REPO: https://cnb.cool/code_free/webtv-coding.git
+
+jobs:
+  mirror:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check CNB_TOKEN
+        id: guard
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          if [ -z "${CNB_TOKEN:-}" ]; then
+            echo "::warning title=CNB Source Mirror Disabled::CNB_TOKEN secret is not configured. Source will NOT sync to cnb.cool. Go to Settings → Secrets → Actions to add it."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 刻意不加 continue-on-error：镜像失败必须看得见。
+      # 之前那版把它吞掉了，结果是「同步没做成」这件事没人会知道。
+      - name: Mirror branches and tags (fast-forward only)
+        if: steps.guard.outputs.enabled == 'true'
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # 用 --bare 而不是 --mirror clone：后者会把 GitHub 的 refs/pull/* 一起搬过来，
+          # 既增大体积又会往镜像里塞一堆无意义的引用。
+          rm -rf mirror.git
+          git clone --bare --quiet "https://github.com/${{ github.repository }}.git" mirror.git
+          cd mirror.git
+
+          # --bare clone 只保证分支可达的标签，这里补一次全量标签。
+          git fetch --quiet --tags origin '+refs/heads/*:refs/heads/*'
+
+          # 令牌走 credential helper 而不是塞进 URL，避免任何日志或报错把它打出来。
+          git config --local credential.helper \
+            '!f() { test "$1" = get && { echo username=cnb; echo "password=$CNB_TOKEN"; }; }; f'
+          git remote add cnb "$CNB_REPO"
+
+          # ---- 守卫：会不会覆盖 CNB 侧独有的提交？----
+          # CNB 上还有 refs/pull/*、refs/notes/* 等平台维护的引用，它们不参与同步，
+          # 也不该被当成「分叉」。这里只比对这次真要推的那些分支。
+          #
+          # 判据：非强制推送只在「远端当前值是新值的祖先」时才成立，所以这里问的是
+          # is-ancestor(CNB, GitHub)。反过来问会把「CNB 落后」误判成「CNB 领先」。
+          git fetch --quiet --no-tags cnb '+refs/heads/*:refs/cnb-heads/*' || true
+          diverge=0
+          while read -r b; do
+            [ -n "$b" ] || continue
+            git rev-parse -q --verify "refs/cnb-heads/$b" >/dev/null || continue
+            if ! git merge-base --is-ancestor "refs/cnb-heads/$b" "refs/heads/$b"; then
+              echo "::error title=CNB 侧存在 GitHub 没有的提交::分支 '$b' 在 CNB 上领先，已拒绝本次同步。"
+              echo "  GitHub $b = $(git rev-parse --short "refs/heads/$b")"
+              echo "  CNB    $b = $(git rev-parse --short "refs/cnb-heads/$b")"
+              echo "  处理方式：把 CNB 侧的改动回流到 GitHub 后再同步，或在 CNB 上把该分支重置为 GitHub 的版本。"
+              diverge=1
+            fi
+          done < <(git for-each-ref --format='%(refname:short)' refs/heads)
+          if [ "$diverge" -ne 0 ]; then
+            exit 1
+          fi
+
+          # ---- 同步 ----
+          # 分支：不带 + 前缀，非快进会被 git 自己拒绝（双保险，守卫之外）。
+          # 标签：带 --force —— 标签是发布标记，GitHub 侧是唯一真源，重打标签要能跟上。
+          git push --quiet cnb 'refs/heads/*:refs/heads/*'
+          git push --quiet --force cnb 'refs/tags/*:refs/tags/*'
+
+          echo "- CNB source mirror: synced \`${{ github.ref_name }}\` (fast-forward only) → https://cnb.cool/code_free/webtv-coding" >> "$GITHUB_STEP_SUMMARY"

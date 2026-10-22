@@ -1,0 +1,434 @@
+name: Android Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'Release'
+        type: choice
+        options:
+          - Release
+          - Debug
+
+permissions:
+  contents: write
+
+jobs:
+  preflight:
+    name: Validate release inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The in-app update picks the highest version across all sources, so a tag that
+      # outruns versionName would offer users an APK that never arrives.
+      - name: Check tag matches versionName
+        if: github.event_name == 'push'
+        run: |
+          VERSION=$(sed -n 's/^[[:space:]]*versionName "\([0-9.]*\)".*/\1/p' app/build.gradle)
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "tag=$TAG versionName=$VERSION"
+          if [ -z "$VERSION" ] || [ "$TAG" != "$VERSION" ]; then
+            echo "::error::Tag v$TAG does not match versionName \"$VERSION\" in app/build.gradle"
+            exit 1
+          fi
+
+      # README and the Pages site carry literal "latest version" markers that no
+      # build step rewrites: v5.14.1 shipped with both still showing the
+      # previous version. Fail here (before the ~25 minute build) instead.
+      - name: Check version literals in README and docs
+        if: github.event_name == 'push'
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Tolerate both "最新版本：**vX.Y.Z**" and "最新版本 **vX.Y.Z**". The README was
+          # restyled for the repository front page and dropped the colon, which
+          # silently stopped the old pattern from matching: the variable came back
+          # empty and the check failed with a message that blamed the version.
+          README_VER=$(sed -nE 's/^最新版本[：:]?[[:space:]]*\*\*v([0-9.]+)\*\*.*/\1/p' README.md | head -1)
+          HERO_VER=$(sed -n 's/.*<span class="sub">v\([0-9.]*\).*/\1/p' docs/index.html | head -1)
+          DOWNLOAD_VER=$(sed -n 's/.*最新版本 <strong[^>]*>v\([0-9.]*\)<\/strong>.*/\1/p' docs/index.html | head -1)
+          echo "tag=$VERSION readme=$README_VER hero=$HERO_VER download=$DOWNLOAD_VER"
+          fail=0
+          for pair in "README.md 最新版本:$README_VER" "docs/index.html hero:$HERO_VER" "docs/index.html 下载区:$DOWNLOAD_VER"; do
+            name="${pair%%:*}"; value="${pair#*:}"
+            if [ -z "$value" ]; then
+              echo "::error::$name 找不到版本标记 —— 检查用的正则没命中，请同步更新这里的匹配规则"
+              fail=1
+            elif [ "$value" != "$VERSION" ]; then
+              echo "::error::$name shows version \"$value\", expected $VERSION — bump it before tagging"
+              fail=1
+            fi
+          done
+
+          # Release assets ship as <flavor>-<version>.apk so every release gets a URL
+          # no CDN edge has cached. The Pages download buttons have to name those same
+          # files: the bare <flavor>.apk they pointed at stops existing as soon as the
+          # first versioned release is published, and a 404 on the download page is
+          # silent until someone tries it.
+          STALE=$(grep -oE '/download/[a-z0-9_]+(-[0-9][0-9.]*)?\.apk' docs/index.html | grep -vE -- "/download/[a-z0-9_]+-${VERSION}\.apk\$" || true)
+          if [ -n "$STALE" ]; then
+            echo "::error::docs/index.html 的下载链接没跟上版本号，发版后会 404："
+            echo "$STALE" | sort -u | sed 's/^/    /'
+            echo "  修复：bash scripts/bump_version.sh $VERSION"
+            fail=1
+          fi
+          exit $fail
+
+      # Gradle already rejects unsigned release builds, but only after a full compile.
+      - name: Check signing secrets
+        if: github.event.inputs.build_type != 'Debug'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          MISSING=""
+          [ -n "$KEYSTORE_BASE64" ] || MISSING="$MISSING KEYSTORE_BASE64"
+          [ -n "$KEY_ALIAS" ] || MISSING="$MISSING KEY_ALIAS"
+          [ -n "$KEY_PASSWORD" ] || MISSING="$MISSING KEY_PASSWORD"
+          if [ -n "$MISSING" ]; then
+            echo "::error::Missing signing secrets:$MISSING"
+            exit 1
+          fi
+
+  build:
+    name: Build APKs
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-37.0 build-tools;37.0.0
+
+      - name: Write local.properties
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > app/release.keystore
+            echo "storeFile=release.keystore" >> local.properties
+            echo "keyAlias=$KEY_ALIAS" >> local.properties
+            echo "storePassword=$KEY_PASSWORD" >> local.properties
+            echo "Signing configured with release keystore"
+          else
+            echo "No signing secrets — APK signed with debug key (cannot update existing install)"
+          fi
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: List build variants
+        run: ./gradlew :app:tasks --all 2>&1 | grep -E "assemble.*Release$" | head -20
+
+      # Chaquopy 17 needs a host Python 3.10 on PATH. This used to come from the
+      # deadsnakes PPA, whose Launchpad signing key can fail to resolve for hours and
+      # take the entire release down; GitHub-hosted Python builds have no such dependency.
+      - name: Set up host Python 3.10 (Chaquopy v17 buildPython)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Expose python3.10 for Chaquopy buildPython
+        run: |
+          PYTHON_DIR="$(dirname "$(command -v python)")"
+          command -v python3.10 >/dev/null || ln -sf "$(command -v python)" "$PYTHON_DIR/python3.10"
+          python3.10 --version
+          python3.10 -m venv --help >/dev/null
+
+      - name: Build mobile-universal
+        run: ./gradlew :app:assembleMobileFullUniversal${{ inputs.build_type || 'Release' }}
+
+      - name: Build mobile-arm64
+        run: ./gradlew :app:assembleMobileFullArm64_v8a${{ inputs.build_type || 'Release' }}
+
+      - name: Build mobile-armv7
+        run: ./gradlew :app:assembleMobileFullArmeabi_v7a${{ inputs.build_type || 'Release' }}
+
+      - name: Build leanback-universal
+        run: ./gradlew :app:assembleLeanbackFullUniversal${{ inputs.build_type || 'Release' }}
+
+      - name: Build leanback-arm64
+        run: ./gradlew :app:assembleLeanbackFullArm64_v8a${{ inputs.build_type || 'Release' }}
+
+      - name: Build leanback-armv7
+        run: ./gradlew :app:assembleLeanbackFullArmeabi_v7a${{ inputs.build_type || 'Release' }}
+
+      - name: Build mobile-lite-arm64
+        run: ./gradlew :app:assembleMobileLiteArm64_v8a${{ inputs.build_type || 'Release' }}
+
+      - name: Build mobile-lite-universal
+        run: ./gradlew :app:assembleMobileLiteUniversal${{ inputs.build_type || 'Release' }}
+
+      - name: Build leanback-lite-universal
+        run: ./gradlew :app:assembleLeanbackLiteUniversal${{ inputs.build_type || 'Release' }}
+
+      - name: Build leanback-lite-arm64
+        run: ./gradlew :app:assembleLeanbackLiteArm64_v8a${{ inputs.build_type || 'Release' }}
+
+      - name: Collect APKs
+        id: collect
+        run: |
+          mkdir -p dist
+          find app/build/outputs/apk -name "*.apk" -type f -exec cp -v {} dist/ \;
+          ls -la dist/
+
+      - name: Check APK sizes (CNB raw limit is 100 MB decimal)
+        run: |
+          # CNB counts in decimal MB and refuses raw access to files it deems
+          # over 100 MB even when the git push itself succeeds.
+          LIMIT=$((100000000))
+          MARGIN=$((99500000))
+          : > dist/cnb_skip.txt
+          for apk in dist/*.apk; do
+            size=$(stat -c %s "$apk")
+            mb=$((size / 1000000))
+            if [ "$size" -gt "$MARGIN" ]; then
+              basename "$apk" >> dist/cnb_skip.txt
+              echo "::warning::$(basename "$apk") is ${mb} MB — exceeds CNB raw 100 MB limit, excluded from mirror sync (in-app update falls back to GitHub)"
+            else
+              echo "OK $(basename "$apk") ${mb} MB (CNB mirror eligible)"
+            fi
+          done
+          cat dist/cnb_skip.txt
+
+      - name: Generate update JSON manifests
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          gradle = Path('app/build.gradle').read_text(encoding='utf-8')
+          code = int(re.search(r'^\s*versionCode\s+(\d+)', gradle, re.M).group(1))
+          version = re.search(r'^\s*versionName\s+"([^"]+)"', gradle, re.M).group(1)
+          tag = os.environ['GITHUB_REF_NAME']
+          if tag != f'v{version}':
+              raise SystemExit('Tag/version mismatch')
+          changelog = Path('CHANGELOG.md').read_text(encoding='utf-8')
+          section = re.search(rf'^## {re.escape(version)}[^\n]*\n(.*?)(?=^## |\Z)', changelog, re.M | re.S)
+          if not section:
+              raise SystemExit('Missing changelog for release')
+          bullets = [re.sub(r'[*`]', '', line[2:]).strip() for line in section.group(1).splitlines() if line.startswith('- ')]
+          desc = f'{tag} — {os.environ["GITHUB_SHA"][:7]}' + '\n' + '\n'.join(bullets[:5])
+          skipped = set(Path('dist/cnb_skip.txt').read_text().splitlines())
+          apks = sorted(Path('dist').glob('*.apk'))
+          expected = {f'{mode}-{abi}.apk' for mode in ('leanback', 'mobile') for abi in ('universal', 'arm64_v8a', 'armeabi_v7a')}
+          expected |= {f'{mode}-lite-{abi}.apk' for mode in ('leanback', 'mobile') for abi in ('universal', 'arm64_v8a')}
+          if {p.name for p in apks} != expected:
+              raise SystemExit('Expected exactly ten APK variants')
+          # Version the file name. Manifests are served with no-cache but the APK
+          # blobs sit behind a 300s CDN TTL, so reusing one name across releases
+          # lets an edge keep handing out the previous build for up to five minutes
+          # — long enough for the app to download it and fail its sha256 check. A
+          # name that changes per release is a URL no edge has ever seen, so it
+          # always misses and the manifest stays the single source of truth: the
+          # app reads this field and builds its GitHub / mirror / CNB URLs from it.
+          dist_dir = Path('dist')
+          for apk in apks:
+              flavor = apk.stem
+              sha = hashlib.sha256()
+              with apk.open('rb') as stream:
+                  for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                      sha.update(chunk)
+              released = apk.with_name(f'{flavor}-{version}.apk')
+              apk.rename(released)
+              manifest = dict(name=tag, versionName=version, desc=desc[:1600], code=code,
+                              apk=released.name, flavor=flavor, size=released.stat().st_size,
+                              sha256=sha.hexdigest(), cnb=f'{flavor}.apk' not in skipped)
+              (dist_dir / f'{flavor}.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+              print(f'Generated {flavor}.json -> {released.name} code={code} size={manifest["size"]}')
+          PY
+
+      - name: Write APK download index
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python3 scripts/apk_index.py dist
+
+      - name: Write release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION="${{ github.ref_name }}"
+          export VERSION="${VERSION#v}"
+          python3 - <<'PY'
+          import os
+          import re
+          import textwrap
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          pattern = rf"(^## {re.escape(version)}[^\n]*\n.*?)(?=^## |\Z)"
+          match = re.search(pattern, changelog, re.M | re.S)
+          notes = match.group(1).strip() if match else f"## v{version} — Release\n\nBuilt automatically by GitHub Actions."
+          notes += textwrap.dedent(f"""
+
+          ### 10 个 APK 产物
+
+          文件名附带版本号，例如 `mobile-arm64_v8a-{version}.apk` —— 每次发版都是全新的 URL，下载不受 CDN 缓存影响。
+
+          - `leanback-universal` — TV 端通用包，适合不确定架构的电视/盒子
+          - `leanback-arm64_v8a` — TV 端 arm64 (v8a)
+          - `leanback-armeabi_v7a` — TV 端 armv7
+          - `mobile-universal` — 手机端通用包，适合不确定架构的手机
+          - `mobile-arm64_v8a` — 手机端 arm64 (v8a)
+          - `mobile-armeabi_v7a` — 手机端 armv7
+          - `mobile-lite-universal` — 手机端精简版通用包（无 MPV 内核与 Python 源）
+          - `mobile-lite-arm64_v8a` — 手机端精简版 arm64 (v8a)
+          - `leanback-lite-universal` — TV 端精简版通用包（无 MPV 内核与 Python 源）
+          - `leanback-lite-arm64_v8a` — TV 端精简版 arm64 (v8a)
+
+          ### 兼容性提示
+
+          - 远程 JAR 必须带 `;sha256;` 否则不加载
+          - Android 11+ 文件管理按系统能力请求所有文件访问或回退到存储权限
+          - 自更新改为导出到 Downloads 通知用户手动安装
+          - 旧设备（Android ≤ 10）行为不变
+          """)
+          Path("dist/release-notes.md").write_text(notes, encoding="utf-8")
+          PY
+        env:
+          VERSION: ${{ github.ref_name }}
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --notes-file dist/release-notes.md \
+            dist/*.apk dist/*.json dist/index.html
+
+      - name: Check mirror availability
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          if [ -z "$CNB_TOKEN" ]; then
+            echo "::warning title=CNB Mirror Sync Disabled::CNB_TOKEN secret is not configured. Update mirror (cnb.cool) will NOT receive new APKs. Go to Settings → Secrets → Actions to add it."
+          else
+            echo "CNB_TOKEN configured, mirror sync will run."
+          fi
+
+      - name: Sync to CNB git repo (server pulls from here)
+        if: startsWith(github.ref, 'refs/tags/v') && env.CNB_TOKEN != ''
+        continue-on-error: true
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          rm -rf cnb-mirror
+          if ! git clone --depth 1 "https://cnb:$CNB_TOKEN@cnb.cool/code_free/webtv.git" cnb-mirror 2>&1; then
+            echo "- CNB APK mirror: clone failed" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          cd cnb-mirror
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Rebuild the mirror history from scratch on every release: an orphan
+          # branch containing only the latest APKs/JSONs keeps the repo small.
+          # Git blobs have no size limit here — oversized APKs (>100 MB) are
+          # unreachable via CNB *raw* but the self-hosted mirror pulls them
+          # via git, so ALL APKs are committed. Raw remains usable for files
+          # under the limit; manifests carry "cnb": false for oversized ones
+          # so the app never routes those downloads through raw.
+          # APKs must be git blobs (CNB raw returns a 134-byte LFS pointer for
+          # LFS-tracked files, which would break the in-app download).
+          # EPG 已挪到本仓的 epg 分支（见 epg-sync.yml）：这里重建 main 的 orphan
+          # 分支不会再碰到它，所以原先那套「先备份、抓不到再沿用」的补丁也不需要了。
+          git checkout --orphan apk-main
+          git rm -rf --cached -q . 2>/dev/null || true
+          rm -rf apk .gitattributes
+          mkdir -p apk
+          cp ../dist/*.apk apk/ || true
+          cp ../dist/*.json apk/ 2>/dev/null || true
+          cp ../dist/index.html apk/ 2>/dev/null || true
+          git add apk/
+          git commit -m "${{ github.ref_name }}"
+          if git push --force origin apk-main:main 2>&1; then
+            echo "- CNB APK mirror: history rebuilt (all APKs, latest only)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- CNB APK mirror: force push failed (kept previous history)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Sync TV source
+        if: startsWith(github.ref, 'refs/tags/v') && env.CNB_TOKEN != ''
+        continue-on-error: true
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          rm -rf cnb-tv
+          if ! git clone --depth 1 "https://cnb:$CNB_TOKEN@cnb.cool/code_free/TV" cnb-tv 2>&1; then
+            echo "- CNB TV source: clone failed" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          cd cnb-tv
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          path = Path('api.json')
+          text = path.read_text(encoding='utf-8')
+          pattern = r'\n\s*\{\s*"key":\s*"版本信息",\s*"name":\s*"版本｜信息",\s*"type":\s*3,\s*"api":\s*"csp_Market",\s*"searchable":\s*0,\s*"changeable":\s*0,\s*"indexs":\s*0,\s*"ext":\s*"https://pizazz\.s3\.bitiful\.net/single\.json"\s*\},'
+          text = re.sub(pattern, '', text, count=1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add api.json
+          git diff --cached --quiet && { echo "- CNB TV source: no changes" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          git commit -m "chore: sync TV source for ${{ github.ref_name }}"
+          if git push origin HEAD:master 2>&1; then
+            echo "- CNB TV source: synced" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- CNB TV source: push failed" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload APKs as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webtv-apks-${{ github.ref_name }}
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      # R8 naming is not reproducible across environments, so crash stacks from a
+      # release APK can only be retraced with the mapping produced in the same run.
+      # Keep one artifact per release covering all six variants.
+      # Debug builds skip R8 entirely, so no mapping exists: with
+      # if-no-files-found: error the step would turn a green Debug run red after
+      # the APK artifact was already stored. Tag pushes and Release dispatches
+      # leave inputs.build_type empty or 'Release', so they still upload mappings.
+      - name: Upload R8 mappings as workflow artifact
+        if: always() && inputs.build_type != 'Debug'
+        uses: actions/upload-artifact@v4
+        with:
+          name: webtv-mappings-${{ github.ref_name }}
+          path: app/build/outputs/mapping/*/mapping.txt
+          if-no-files-found: error
+          retention-days: 90

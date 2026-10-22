@@ -1,0 +1,38 @@
+.DS_Store
+.idea/
+.vscode/
+.claude/
+.gradle/
+.zcode/
+.zcode/*
+build/
+dist/
+out/
+Release/
+*.apk
+*.aab
+*.jks
+*.keystore
+*.keystore.b64
+local.properties
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+nostr_副本*.html
+*_副本*.html
+*.min.html
+*.tmp
+*.log
+*-apkapp.txt
+third_party/sources/
+
+# 本地调试产物（截图 / UI dump / logcat / 本地安装包暂存），统一收纳在 debug/
+/debug/
+
+# 工作区记忆
+/.workbuddy/
+
+# 内部文档（开发文档 / 审计报告 / 扩展指南）：不进公开仓库，
+# 本地保留，另有 CNB 私有仓的 docs 分支托管
+/docs-private/

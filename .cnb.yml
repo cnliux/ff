@@ -1,0 +1,114 @@
+# CNB 流水线配置 —— code_free/webtv-coding（源码**镜像**仓）
+#
+# ⚠️ 唯一可写源是 GitHub motao123/webtv。本仓库由
+#    .github/workflows/cnb-source-mirror.yml 单向同步（全部分支 + 全部标签）。
+#    要改代码请到 GitHub 开分支 / 发 PR —— 在这里直接提交的改动不会被同步回去，
+#    且下一次同步会把它拦下并告警（镜像已去掉 --mirror 与强制推送，遇到两侧
+#    分叉时显式失败，而不是静默覆盖）。
+#
+# 所以这里的流水线只承担 GitHub 侧没有的能力：
+#   1. PR 自动代码评审（npc:go）
+#   2. 在 CNB 上评论召唤 NPC
+#
+# 刻意**不配置 main: push 门禁**：镜像推送本身也会触发 push 事件，而同一份提交
+# 刚刚在 GitHub CI（ci.yml）上跑过完全相同的编译 + 单测，再跑一遍是纯重复消耗
+# （约 9 分钟/次，随每次 push 触发）。保留 main: pull_request 门禁 —— 它只在
+# 有人真的在 CNB 侧开 PR 时才生效，那正是 GitHub 看不见的场景。
+#
+# 完整构建（含签名、10 个变体、发版）仍由 GitHub Actions 的 android-release.yml
+# 负责，这里只做「评审 + 轻量校验」，刻意不碰签名密钥。
+
+# 所有分支的 PR：自动代码评审
+"$":
+  pull_request:
+    - name: PR 自动评审
+      docker:
+        image: cnbcool/default-npc:latest
+      stages:
+        - name: npc 评审
+          type: npc:go
+          options:
+            role: 代码审查员
+            systemPrompt: |
+              你是 WebHomeTV（Android 影音播放器壳子）的代码审查员。
+              技术栈：Java 21 + Gradle 多模块（:app / :catvod / :chaquo / :quickjs）、
+              Android mobile + leanback 双 UI、Chaquopy Python 运行时、MPV 播放内核。
+              审查重点按优先级：
+              1. 正确性：并发/线程、生命周期泄漏、空指针、资源未关闭
+              2. 安全：硬编码密钥、明文 HTTP、外部输入未校验、导出组件越权
+              3. 兼容性：Android 7.0(minSdk 24) 到 16(targetSdk 37) 的 API 差异
+              4. 可维护性：重复代码、命名、注释与代码不一致
+              请用中文输出，先给结论（可合/需改/阻塞），再逐条列问题（文件:行 + 原因 + 建议）。
+              没问题就直说没问题，不要凑字数。
+            userPrompt: |
+              审查本次 PR（#$CNB_PULL_REQUEST_IID，标题：$CNB_PULL_REQUEST_TITLE）的代码变更。
+              只评审 diff 涉及的内容，不要泛泛而谈整个仓库。
+
+  # 评论 @NPC 时召唤（保留默认能力：@ 我就能干活）
+  #
+  # 注意：本仓库是只读镜像。NPC 在这里**不要**直接往 main 提交或合并 PR ——
+  # 那些改动不会被同步回 GitHub，反而会在下一次镜像同步时被拦下。
+  # 需要改代码时，把结论写成建议或 patch，交给 GitHub 侧处理。
+  issue.comment@npc:
+    - name: NPC 响应
+      docker:
+        image: cnbcool/default-npc:latest
+      stages:
+        - name: npc go
+          type: npc:go
+  pull_request.comment@npc:
+    - name: NPC 响应
+      docker:
+        image: cnbcool/default-npc:latest
+      stages:
+        - name: npc go
+          type: npc:go
+
+  # 页面手动触发：发版记录 / 任意提问
+  web_trigger:
+    - name: 手动任务
+      docker:
+        image: cnbcool/default-npc:latest
+      stages:
+        - name: npc go
+          type: npc:go
+          options:
+            role: 发布助理
+            userPrompt: $userPrompt
+
+# main 分支：CNB 侧 PR 的轻量编译门禁（Debug 变体，不依赖签名密钥）
+#
+# 构建环境见 ci/android.Dockerfile —— CNB 的 cnbcool 命名空间下没有 Android 镜像，
+# 由 Dockerfile 动态构建并缓存（改 Dockerfile 才会重建）。
+main:
+  pull_request:
+    - name: 编译门禁
+      runner:
+        cpus: 8
+      docker:
+        build: ci/android.Dockerfile
+      stages:
+        - name: 准备
+          script: |
+            set -e
+            echo "sdk.dir=$ANDROID_HOME" > local.properties
+            chmod +x gradlew
+        - name: 编译 TV + 手机端
+          script: |
+            ./gradlew --no-daemon \
+              :app:compileLeanbackFullArm64_v8aDebugJavaWithJavac \
+              :app:compileMobileFullArm64_v8aDebugJavaWithJavac \
+              :catvod:compileDebugJavaWithJavac
+        - name: 单元测试
+          script: |
+            ./gradlew --no-daemon \
+              :app:testLeanbackFullArm64_v8aDebugUnitTest \
+              :app:testMobileFullArm64_v8aDebugUnitTest
+        - name: 中转服务测试
+          script: |
+            if [ -d serverless/webtv-remote-go ]; then
+              # go test -race 依赖 cgo，需显式打开；gcc 由 Dockerfile 提供
+              export CGO_ENABLED=1
+              cd serverless/webtv-remote-go
+              go test -race ./... && go vet ./...
+            fi

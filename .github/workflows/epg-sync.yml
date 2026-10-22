@@ -1,0 +1,66 @@
+name: EPG sync
+
+# 上游 litiande03/epg 每天约 5 次自动更新节目单（多在 UTC 00/06/12/15/17/22 点附近）。
+# 本工作流每 4 小时拉一次最新 pl.xml.gz，推送到 CNB 镜像仓 code_free/webtv 的
+# **epg 分支**（不再放在 main 的 apk/ 目录下）。
+#
+# 为什么单独一条分支：main 是发版时用 orphan 分支整体重建的 APK 镜像，每次发布会把
+# apk/ 整个换掉。EPG 与 APK 的生命周期完全不同，挤在同一分支上就只能靠「发版前备份、
+# 抓不到再沿用」的补丁兜着。挪到独立分支后，发版流程根本不会碰到它。
+#
+# 宝塔 pull_apk.sh 每 5 分钟从
+#   https://cnb.cool/code_free/webtv/-/git/raw/epg/pl.xml.gz
+# 拉取；电视端仍通过 https://pan.imotao.com/file/apk/epg/pl.xml.gz 直连下载。
+
+on:
+  schedule:
+    - cron: "20 */4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: epg-sync
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Fetch upstream EPG
+        run: |
+          curl -sSL --fail --retry 3 --max-time 180 \
+            -o pl.xml.gz \
+            "https://raw.githubusercontent.com/litiande03/epg/master/pl.xml.gz"
+          gzip -t pl.xml.gz
+          sha256sum pl.xml.gz
+
+      - name: Push into CNB mirror repo (epg branch)
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          rm -rf cnb-mirror
+          mkdir cnb-mirror && cd cnb-mirror
+          git init -q .
+          git remote add origin "https://cnb:$CNB_TOKEN@cnb.cool/code_free/webtv.git"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # 分支可能尚不存在（首次运行）：取不到就以 orphan 起一条，取到了就接着它提交。
+          git fetch -q --depth 1 origin epg 2>/dev/null || true
+          git checkout -q -b epg FETCH_HEAD 2>/dev/null || git checkout -q --orphan epg
+          cp ../pl.xml.gz pl.xml.gz
+          git add pl.xml.gz
+          # 首次运行没有 HEAD，不能拿 diff --cached 判断（会在无 HEAD 时歧义）。
+          if git rev-parse -q --verify HEAD >/dev/null && git diff --cached --quiet; then
+            echo "EPG 无变化，跳过推送"
+          else
+            git commit -q -m "epg sync $(date -u +%FT%TZ)"
+            git push -q origin HEAD:epg
+            echo "EPG 已推送到 CNB 镜像的 epg 分支"
+          fi
+
+      - name: Wait for mirror host pull
+        run: |
+          echo "等待宝塔 pull_apk.sh 定时拉取（最长约 5 分钟）后自动生效"

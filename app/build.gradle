@@ -1,0 +1,211 @@
+plugins {
+    alias libs.plugins.android.application
+}
+
+def localProps = new Properties()
+def localPropsFile = rootProject.file('local.properties')
+if (localPropsFile.exists()) {
+    localPropsFile.withInputStream {
+        localProps.load(it)
+    }
+}
+def hasReleaseSigning = localProps['storeFile'] && localProps['keyAlias'] && localProps['storePassword']
+if (gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') } && !hasReleaseSigning) {
+    throw new GradleException('Release signing is required for release builds')
+}
+
+// A crash report only carries the version and the shipped file, which is not enough to
+// locate the commit that produced that build, so the APK now records its own provenance.
+def gitOutput = { List<String> args ->
+    try {
+        def process = args.execute(null, rootProject.file('.'))
+        process.waitFor()
+        process.exitValue() == 0 ? process.text.trim() : 'unknown'
+    } catch (Exception ignored) {
+        'unknown'
+    }
+}
+def gitRevision = gitOutput(['git', 'rev-parse', '--short', 'HEAD'])
+def gitDirty = gitOutput(['git', 'status', '--porcelain']).with { it == 'unknown' || it.isEmpty() ? 'clean' : 'dirty' }
+def buildTime = new Date().format('yyyy-MM-dd HH:mm:ss')
+
+android {
+    namespace = 'com.fongmi.android.tv'
+
+    compileSdk libs.versions.compileSdk.get().toInteger()
+
+    defaultConfig {
+        applicationId "com.fongmi.android.tv"
+        minSdk libs.versions.minSdk.get().toInteger()
+        targetSdk libs.versions.targetSdk.get().toInteger()
+        versionCode 719
+        versionName "5.17.1"
+        buildConfigField "String", "MEDIA3_VERSION", "\"${libs.versions.media3.get()}\""
+        buildConfigField "String", "GIT_REVISION", "\"${gitRevision}\""
+        buildConfigField "String", "GIT_STATE", "\"${gitDirty}\""
+        buildConfigField "String", "BUILD_TIME", "\"${buildTime}\""
+        resConfigs "en", "zh-rCN", "zh-rTW"
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments = ["room.schemaLocation": "$projectDir/schemas".toString()]
+            }
+        }
+    }
+
+    flavorDimensions = ["mode", "edition", "abi"]
+
+    productFlavors {
+        leanback {
+            dimension "mode"
+        }
+        mobile {
+            dimension "mode"
+        }
+        //完整版：全部能力。lite 精简版见下方 lite flavor 说明。
+        full {
+            dimension "edition"
+            buildConfigField "boolean", "FEATURE_MPV", "true"
+            buildConfigField "boolean", "FEATURE_PYTHON", "true"
+        }
+        //精简版：去掉 MPV 内核(约37MB)与 Python 运行时(约21MB)，保留 EXO/IJK 双内核与全部源协议。
+        lite {
+            dimension "edition"
+            buildConfigField "boolean", "FEATURE_MPV", "false"
+            buildConfigField "boolean", "FEATURE_PYTHON", "false"
+        }
+        universal {
+            dimension "abi"
+            ndk { abiFilters "arm64-v8a", "armeabi-v7a" }
+        }
+        arm64_v8a {
+            dimension "abi"
+            ndk { abiFilters "arm64-v8a" }
+        }
+        armeabi_v7a {
+            dimension "abi"
+            ndk { abiFilters "armeabi-v7a" }
+        }
+    }
+
+    lint {
+        disable 'UnsafeOptInUsageError'
+        disable 'ExpiredTargetSdkVersion'
+    }
+
+    buildFeatures {
+        buildConfig = true
+        viewBinding = true
+    }
+
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(localProps['storeFile'])
+                keyAlias localProps['keyAlias']
+                keyPassword localProps['storePassword']
+                storePassword localProps['storePassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled = true
+            shrinkResources = true
+            signingConfig = signingConfigs.release
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro', 'proguard-rules-media.pro'
+        }
+    }
+
+    configurations.configureEach {
+        exclude group: 'stax', module: 'stax-api'
+        exclude group: 'xpp3', module: 'xpp3'
+        exclude group: 'com.android.support'
+        resolutionStrategy {
+            force libs.okhttp
+            eachDependency { details ->
+                if (details.requested.group == 'androidx.media3') {
+                    details.useVersion(libs.versions.media3.get())
+                    details.because('Use bundled Media3 build with MediaTitle and danmaku APIs')
+                }
+            }
+        }
+    }
+
+    lint {
+        disable 'UnsafeOptInUsageError'
+        disable 'ExpiredTargetSdkVersion'
+    }
+
+    compileOptions {
+        coreLibraryDesugaringEnabled = true
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+}
+
+androidComponents {
+    //精简版只出 universal 与 arm64：armv7 老设备不是精简版目标（issue #11 反馈 TV 端同样需要精简版，已放开 leanback）。
+    beforeVariants(selector().all()) { variantBuilder ->
+        def name = variantBuilder.name
+        if (name.contains('Lite') && name.contains('Armeabi')) {
+            variantBuilder.enabled = false
+        }
+    }
+    onVariants(selector().withBuildType('release')) { variant ->
+        def flavors = variant.productFlavors.collectEntries { [(it.first): it.second] }
+        def mode = flavors['mode'] ?: 'mode'
+        def edition = flavors['edition'] ?: 'edition'
+        def abi = flavors['abi'] ?: 'abi'
+        def editionPart = edition == 'full' ? '' : "-${edition}"
+        variant.outputs.each { output ->
+            output.outputFileName.set("${mode}${editionPart}-${abi}.apk")
+        }
+    }
+    //MPV 原生库按 ABI 注入：full 单 ABI 变体携带，lite 与 universal 不带（universal 维持现状）。
+    onVariants(selector().withFlavor('edition', 'full').withFlavor('abi', 'arm64_v8a')) { variant ->
+        variant.sources.assets.addStaticSourceDirectory(project.file('src/mpvlibs-arm64/assets').absolutePath)
+    }
+}
+
+dependencies {
+    implementation fileTree(dir: "libs", include: ["*.aar"])
+    implementation project(':catvod')
+    fullImplementation project(':chaquo')
+    implementation project(':quickjs')
+    implementation libs.appcompat
+    implementation libs.lifecycle.service
+    implementation libs.media
+    implementation libs.bundles.media3
+    implementation libs.nextlib.media3ext
+    implementation libs.recyclerview
+    implementation libs.room.runtime
+    implementation libs.splashscreen
+    implementation libs.swiperefreshlayout
+    implementation libs.viewpager2
+    implementation libs.webkit
+    implementation libs.android.gif.drawable
+    implementation libs.bundles.glide
+    implementation libs.bundles.jupnp
+    implementation libs.customactivityoncrash
+    implementation libs.eventbus
+    implementation libs.flexbox
+    implementation libs.jgit
+    implementation libs.lottie
+    implementation libs.material
+    implementation libs.materialdesigncolors
+    implementation libs.nanohttpd
+    implementation libs.newpipeextractor
+    implementation libs.permissionx
+    implementation libs.simple.xml
+    implementation libs.tensorflow.lite
+    implementation libs.textdrawable
+    leanbackImplementation libs.leanback
+    leanbackImplementation libs.androidautosize
+    mobileImplementation libs.biometric
+    mobileImplementation libs.zxing.android.embedded
+    annotationProcessor libs.room.compiler
+    annotationProcessor libs.glide.compiler
+    coreLibraryDesugaring libs.desugar
+    testImplementation 'junit:junit:4.13.2'
+}

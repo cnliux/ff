@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - source/localization
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Compile and unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The download page is generated inside the release job, so a naming mistake
+      # there only shows up after a ~25 minute build and exits hard, blocking the
+      # release. These need no SDK and take a few seconds.
+      - name: Check release scripts
+        run: |
+          python3 scripts/test_apk_index.py
+          python3 scripts/check_i18n.py
+          bash -n scripts/pull_apk.sh
+          bash -n scripts/bump_version.sh
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-37.0 build-tools;37.0.0
+
+      - name: Write local.properties
+        run: echo "sdk.dir=$ANDROID_HOME" > local.properties
+
+      # Same host Python Chaquopy needs, without the deadsnakes PPA: its Launchpad
+      # signing key can be unavailable for hours and would redden main for no reason.
+      - name: Set up host Python 3.10 (Chaquopy v17 buildPython)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Expose python3.10 for Chaquopy buildPython
+        run: |
+          PYTHON_DIR="$(dirname "$(command -v python)")"
+          command -v python3.10 >/dev/null || ln -sf "$(command -v python)" "$PYTHON_DIR/python3.10"
+          python3.10 --version
+          python3.10 -m venv --help >/dev/null
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      # Debug variants only: release needs the signing keystore, and a broken main
+      # branch should not depend on secrets being present.
+      - name: Compile TV and mobile
+        run: |
+          ./gradlew --no-daemon \
+            :app:compileLeanbackFullArm64_v8aDebugJavaWithJavac \
+            :app:compileMobileFullArm64_v8aDebugJavaWithJavac \
+            :catvod:compileDebugJavaWithJavac
+
+      - name: Run unit tests
+        run: ./gradlew --no-daemon :app:testLeanbackFullArm64_v8aDebugUnitTest :app:testMobileFullArm64_v8aDebugUnitTest
+
+      # Compiling is not the same as shipping: an installable debug APK is what
+      # can actually be launched on a TV box / phone. Debug variants need no
+      # signing secrets, so this stays green on a fork without any secret set up.
+      # Only the two arm64 full variants are built here — they cover both app
+      # flavors (TV / mobile); the full flavour matrix is the release
+      # workflow's job and takes far longer.
+      - name: Assemble debug APKs
+        run: |
+          ./gradlew --no-daemon \
+            :app:assembleMobileFullArm64_v8aDebug \
+            :app:assembleLeanbackFullArm64_v8aDebug
+
+      - name: Upload debug APKs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webtv-debug-apks-${{ github.ref_name }}
+          path: app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: app/build/reports/tests/
+          retention-days: 7
