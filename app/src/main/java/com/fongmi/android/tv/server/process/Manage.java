@@ -124,14 +124,14 @@ public class Manage implements Process {
                 case "/manage/sources/order" -> sourcesOrder(session.getParms());
                 case "/manage/sources/export" -> sourcesExport(session.getParms());
                 case "/manage/sources/test" -> sourcesTest(session.getParms());
-                case "/manage/sources/reset" -> sourcesReset();
+                case "/manage/sources/reset" -> sourcesReset(session.getParms());
                 case "/manage/sources/enable" -> sourcesSetOff(session.getParms(), false);
                 case "/manage/sources/disable" -> sourcesSetOff(session.getParms(), true);
                 case "/manage/sources/enable-all" -> sourcesSetOffAll(session.getParms(), false);
                 case "/manage/sources/disable-all" -> sourcesSetOffAll(session.getParms(), true);
                 case "/manage/sources/block-invalid" -> sourcesSetOffInvalid(session.getParms(), true);
                 case "/manage/sources/delete-invalid" -> sourcesSetOffInvalid(session.getParms(), false);
-                case "/manage/sources/delete-duplicate" -> sourcesDeleteDuplicate();
+                case "/manage/sources/delete-duplicate" -> sourcesDeleteDuplicate(session.getParms());
                 case "/manage/sources/subscription/import" -> sourcesSubscriptionImport(session.getParms());
                 case "/manage/sources/subscription/list" -> sourcesSubscriptionList();
                 case "/manage/sources/subscription/update" -> sourcesSubscriptionUpdate(session.getParms());

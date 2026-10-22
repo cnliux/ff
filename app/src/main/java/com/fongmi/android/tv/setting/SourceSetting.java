@@ -347,10 +347,6 @@ public class SourceSetting {
      * 保存站源并重新加载接口配置。
      */
     public static void apply(JsonArray sites) throws Exception {
-        apply(configJson(), sites);
-    }
-
-    public static void apply(JsonArray sites) throws Exception {
         apply("", sites);
     }
 
