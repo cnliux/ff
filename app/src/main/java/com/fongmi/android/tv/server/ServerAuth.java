@@ -89,15 +89,17 @@ public class ServerAuth {
     }
 
     private static boolean protectedPath(String url) {
-        return url.startsWith("/manage/") || url.startsWith("/file") || url.startsWith("/upload") || url.startsWith("/newFolder") || url.startsWith("/delFolder") || url.startsWith("/delFile") || url.startsWith("/debug/") || url.startsWith("/cache") || url.startsWith("/action") || url.startsWith("/proxy") || url.startsWith("/webResource") || url.startsWith("/pan/check") || url.startsWith("/parse") || url.startsWith("/media") || url.startsWith("/tvbus") || url.startsWith("/device") || url.startsWith("/api/playback") || url.startsWith("/playback") || url.startsWith("/m3u8") || url.startsWith("/image/");
+        // /manage/ 不再要求 token：手机浏览器直接输入 IP 地址 URL 即可进入管理页（用户要求）
+        return url.startsWith("/file") || url.startsWith("/upload") || url.startsWith("/newFolder") || url.startsWith("/delFolder") || url.startsWith("/delFile") || url.startsWith("/debug/") || url.startsWith("/cache") || url.startsWith("/action") || url.startsWith("/proxy") || url.startsWith("/webResource") || url.startsWith("/pan/check") || url.startsWith("/parse") || url.startsWith("/media") || url.startsWith("/tvbus") || url.startsWith("/device") || url.startsWith("/api/playback") || url.startsWith("/playback") || url.startsWith("/m3u8") || url.startsWith("/image/");
     }
 
     /**
      * State-changing or sensitive paths that must carry the server token even from loopback,
      * so a same-device malicious app/page cannot silently mutate state without the token.
+     * /manage/ 已按用户要求放开：管理页及其接口不再强制 token。
      */
     private static boolean isSensitivePath(String url) {
-        return url.startsWith("/manage/") || url.startsWith("/file") || url.startsWith("/upload") || url.startsWith("/newFolder") || url.startsWith("/delFolder") || url.startsWith("/delFile") || url.startsWith("/debug/") || url.startsWith("/cache") || url.startsWith("/action") || url.startsWith("/pan/check") || url.startsWith("/api/playback") || url.startsWith("/playback");
+        return url.startsWith("/file") || url.startsWith("/upload") || url.startsWith("/newFolder") || url.startsWith("/delFolder") || url.startsWith("/delFile") || url.startsWith("/debug/") || url.startsWith("/cache") || url.startsWith("/action") || url.startsWith("/pan/check") || url.startsWith("/api/playback") || url.startsWith("/playback");
     }
 
     /**

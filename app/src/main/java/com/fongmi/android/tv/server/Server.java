@@ -36,7 +36,7 @@ public class Server {
     }
 
     public String getAddress(int tab) {
-        return ServerAuth.withToken(getAddress(false) + "?tab=" + tab);
+        return getAddress(false) + "?tab=" + tab;
     }
 
     public String getAddress(String path) {

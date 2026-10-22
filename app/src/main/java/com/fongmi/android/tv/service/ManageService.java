@@ -86,11 +86,11 @@ public class ManageService extends Service {
     }
 
     public static String getLocalUrl() {
-        return ServerAuth.withToken(Server.get().getAddress(true) + PATH);
+        return Server.get().getAddress(true) + PATH;
     }
 
     public static String getLanUrl() {
-        return ServerAuth.withToken(Server.get().getAddress(false) + PATH);
+        return Server.get().getAddress(false) + PATH;
     }
 
     public static String getDisplayUrl() {
