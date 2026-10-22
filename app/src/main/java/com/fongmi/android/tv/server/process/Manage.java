@@ -1046,22 +1046,6 @@ public class Manage implements Process {
         return sourcesExport();
     }
 
-    private Response sourcesTest(Map<String, String> params) throws Exception {
-        JsonArray sites = SourceSetting.sites();
-        String key = params.getOrDefault("key", "").trim();
-        if (!TextUtils.isEmpty(key)) {
-            JsonArray filtered = new JsonArray();
-            for (JsonElement element : sites) {
-                if (element.isJsonObject() && key.equals(Json.safeString(element.getAsJsonObject(), "key"))) filtered.add(element);
-            }
-            sites = filtered;
-        }
-        JsonObject object = new JsonObject();
-        object.addProperty("count", sites.size());
-        object.add("items", SourceSetting.test(sites, 4000));
-        return json(object);
-    }
-
     private Response sourcesReset() throws Exception {
         SourceSetting.reset();
         return sources(Map.of());
