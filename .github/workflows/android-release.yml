@@ -95,8 +95,7 @@ jobs:
           [ -n "$KEY_ALIAS" ] || MISSING="$MISSING KEY_ALIAS"
           [ -n "$KEY_PASSWORD" ] || MISSING="$MISSING KEY_PASSWORD"
           if [ -n "$MISSING" ]; then
-            echo "::error::Missing signing secrets:$MISSING"
-            exit 1
+            echo "::warning::Missing signing secrets:$MISSING — 构建任务将自动生成自签名 keystore，产物仍有签名"
           fi
 
   build:
