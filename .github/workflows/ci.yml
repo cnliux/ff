@@ -69,10 +69,14 @@ jobs:
       # branch should not depend on secrets being present.
       - name: Compile TV and mobile
         run: |
+          set -o pipefail
           ./gradlew --no-daemon \
             :app:compileLeanbackFullArm64_v8aDebugJavaWithJavac \
             :app:compileMobileFullArm64_v8aDebugJavaWithJavac \
-            :catvod:compileDebugJavaWithJavac
+            :catvod:compileDebugJavaWithJavac 2>&1 | tee gradle-compile.log || {
+            grep -n -A2 "error:" gradle-compile.log | head -120 > "$GITHUB_STEP_SUMMARY" || true
+            exit 1
+          }
 
       - name: Run unit tests
         run: ./gradlew --no-daemon :app:testLeanbackFullArm64_v8aDebugUnitTest :app:testMobileFullArm64_v8aDebugUnitTest
