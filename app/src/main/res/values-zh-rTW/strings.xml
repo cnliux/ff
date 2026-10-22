@@ -142,6 +142,12 @@
 WebHomeTV 是播放器外殼，不內建內容源，請使用合法設定。</string>
     <string name="about_check_update">檢查更新</string>
     <string name="site_block">站點屏蔽</string>
+    <string name="source_manage">視頻採集源管理</string>
+    <string name="source_manage_open_page">打開網頁管理頁</string>
+    <string name="source_manage_test_sort">全部測速並按速度排序</string>
+    <string name="source_manage_enable_all">全部啟用</string>
+    <string name="source_manage_disable_all">全部停用</string>
+    <string name="source_manage_done">操作已提交，結果見網頁管理頁</string>
     <string name="playback_sync">觀影記錄同步</string>
     <string name="codec_capability_short">編解碼能力</string>
     <string name="codec_capability_title">硬體編解碼能力</string>

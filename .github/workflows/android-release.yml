@@ -141,7 +141,14 @@ jobs:
             echo "storePassword=$KEY_PASSWORD" >> local.properties
             echo "Signing configured with release keystore"
           else
-            echo "No signing secrets — APK signed with debug key (cannot update existing install)"
+            # 未配置签名 secrets 时，自动生成自签名 release keystore，保证产物有签名
+            if [ ! -f app/release.keystore ]; then
+              keytool -genkeypair -v -keystore app/release.keystore -alias ff-release -keyalg RSA -keysize 2048 -validity 10950 -storepass fongmi123 -keypass fongmi123 -dname "CN=ff, OU=ff, O=cnliux, L=cn, ST=cn, C=CN"
+            fi
+            echo "storeFile=release.keystore" >> local.properties
+            echo "keyAlias=ff-release" >> local.properties
+            echo "storePassword=fongmi123" >> local.properties
+            echo "Signing configured with generated self-signed keystore"
           fi
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}

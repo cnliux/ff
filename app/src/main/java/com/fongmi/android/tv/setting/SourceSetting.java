@@ -38,6 +38,7 @@ public class SourceSetting {
     private static final String KEY = "key";
     private static final String NAME = "name";
     private static final String SITES = "sites";
+    private static final String OFF = "off";
     private static final int TEST_THREADS = 16;
     private static final long TEST_TIMEOUT = 4000;
     private static String cachedUrl = "";
@@ -125,6 +126,8 @@ public class SourceSetting {
             if (site.has("changeable")) item.add("changeable", site.get("changeable"));
             if (site.has("quickSearch")) item.add("quickSearch", site.get("quickSearch"));
             item.addProperty("url", probeUrl(site));
+            // 是否停用，页面据此展示启停状态
+            item.addProperty(OFF, isOff(site) ? 1 : 0);
             result.add(item);
         }
         return result;
@@ -149,6 +152,28 @@ public class SourceSetting {
             JsonElement sites = object.get(SITES);
             if (!sites.isJsonArray()) throw new Exception("sites 不是数组");
             return filter(sites.getAsJsonArray());
+        }
+        // storeHouse 分支：转换成站源语义（sourceName/sourceUrl -> key/name/api）
+        if (object.has("storeHouse")) {
+            JsonElement storeHouse = object.get("storeHouse");
+            if (!storeHouse.isJsonArray()) throw new Exception("storeHouse 不是数组");
+            JsonArray array = new JsonArray();
+            int index = 0;
+            for (JsonElement item : storeHouse.getAsJsonArray()) {
+                if (!item.isJsonObject()) continue;
+                JsonObject entry = item.getAsJsonObject();
+                String url = Json.safeString(entry, "sourceUrl").trim();
+                if (TextUtils.isEmpty(url)) continue;
+                String name = Json.safeString(entry, "sourceName").trim();
+                JsonObject site = new JsonObject();
+                site.addProperty(KEY, TextUtils.isEmpty(name) ? "house_" + index : name);
+                site.addProperty(NAME, TextUtils.isEmpty(name) ? url : name);
+                site.addProperty("api", url);
+                site.addProperty("type", 0);
+                array.add(site);
+                index++;
+            }
+            return filter(array);
         }
         if (object.has("urls")) throw new Exception("这是配置仓库内容，没有站源");
         if (object.has(KEY)) {
@@ -183,6 +208,84 @@ public class SourceSetting {
         JsonArray result = new JsonArray();
         for (JsonElement element : current) {
             if (element.isJsonObject() && key.equals(Json.safeString(element.getAsJsonObject(), KEY))) continue;
+            result.add(element);
+        }
+        return result;
+    }
+
+    /**
+     * 判断站源是否处于停用状态（off=1 或 true）。
+     */
+    public static boolean isOff(JsonObject site) {
+        JsonElement element = site.get(OFF);
+        if (element == null || element.isJsonNull()) return false;
+        if (element.isJsonPrimitive()) {
+            if (element.getAsJsonPrimitive().isBoolean()) return element.getAsJsonPrimitive().getAsBoolean();
+            return element.getAsJsonPrimitive().isNumber() && element.getAsJsonPrimitive().getAsInt() != 0;
+        }
+        return false;
+    }
+
+    /**
+     * 对指定 key 的站源置位或清除停用标记，返回新列表。
+     */
+    public static JsonArray setOff(JsonArray current, List<String> keys, boolean off) {
+        JsonArray result = new JsonArray();
+        for (JsonElement element : current) {
+            if (!element.isJsonObject()) continue;
+            JsonObject site = element.getAsJsonObject().deepCopy();
+            if (keys.contains(Json.safeString(site, KEY))) {
+                if (off) site.addProperty(OFF, 1);
+                else site.remove(OFF);
+            }
+            result.add(site);
+        }
+        return result;
+    }
+
+    /**
+     * 过滤掉停用的站源。
+     */
+    public static JsonArray filterEnabled(JsonArray sites) {
+        JsonArray result = new JsonArray();
+        for (JsonElement element : sites) {
+            if (!element.isJsonObject()) continue;
+            if (isOff(element.getAsJsonObject())) continue;
+            result.add(element);
+        }
+        return result;
+    }
+
+    /**
+     * 当前接口的启用（非停用）站源列表。
+     */
+    public static JsonArray enabledOnly() throws Exception {
+        return filterEnabled(sites());
+    }
+
+    /**
+     * 当前接口全部站源 key，保持原始顺序。
+     */
+    public static List<String> keys(JsonArray sites) {
+        List<String> result = new ArrayList<>();
+        for (JsonElement element : sites) {
+            if (!element.isJsonObject()) continue;
+            result.add(Json.safeString(element.getAsJsonObject(), KEY));
+        }
+        return result;
+    }
+
+    /**
+     * 按 api 地址去重，保留第一个出现的站源。
+     */
+    public static JsonArray dedupeByApi(JsonArray current) {
+        JsonArray result = new JsonArray();
+        List<String> seen = new ArrayList<>();
+        for (JsonElement element : current) {
+            if (!element.isJsonObject()) continue;
+            String api = Json.safeString(element.getAsJsonObject(), "api").trim();
+            if (!TextUtils.isEmpty(api) && seen.contains(api)) continue;
+            if (!TextUtils.isEmpty(api)) seen.add(api);
             result.add(element);
         }
         return result;

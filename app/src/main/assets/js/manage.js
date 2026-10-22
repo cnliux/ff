@@ -2094,6 +2094,7 @@ function buildSourceCard(item, index) {
             <div class="source-desc">${escHtml(desc)}</div>
         </div>
         <div class="config-actions">
+            <button class="file-action" type="button" onclick="toggleSource('${escPath(key)}',${item.off ? 0 : 1})">${item.off ? '启用' : '停用'}</button>
             <button class="file-action" type="button" onclick="testSource('${escPath(key)}')">测速</button>
             <button class="file-action" type="button" onclick="moveSource(${index},-1)"${index === 0 ? ' disabled' : ''}>上移</button>
             <button class="file-action" type="button" onclick="moveSource(${index},1)"${index === sourcesData.length - 1 ? ' disabled' : ''}>下移</button>
@@ -2125,6 +2126,111 @@ function deleteSource(key) {
         applySourcesData(data);
         warnToast('源已删除');
     }, '删除失败');
+}
+function toggleSource(key, off) {
+    postJson(`/manage/sources/${off ? 'disable' : 'enable'}`, { key }, data => {
+        applySourcesData(data);
+        warnToast(off ? '源已停用' : '源已启用');
+    }, '操作失败');
+}
+function setAllSources(off) {
+    postJson(off ? '/manage/sources/disable-all' : '/manage/sources/enable-all', {}, data => {
+        applySourcesData(data);
+        warnToast(off ? '已全部停用' : '已全部启用');
+    }, '操作失败');
+}
+function testAllSourcesAuto() {
+    warnToast('测速中，完成后自动排序');
+    postJson('/manage/sources/test', { auto: '1' }, data => {
+        sourceTestResults = {};
+        (Array.isArray(data.items) ? data.items : []).forEach(item => { sourceTestResults[item.key] = item; });
+        loadSourcesManage(true);
+        warnToast('测速完成，已按速度排序');
+    }, '测速失败');
+}
+function cleanInvalidSources(mode) {
+    postJson(`/manage/sources/${mode}`, {}, data => {
+        applySourcesData(data);
+        warnToast(mode === 'block-invalid' ? '已屏蔽无效源' : '已删除无效源');
+    }, '操作失败');
+}
+function deleteDuplicateSources() {
+    postJson('/manage/sources/delete-duplicate', {}, data => {
+        applySourcesData(data);
+        warnToast('已按地址去重');
+    }, '操作失败');
+}
+function exportSourcesTvbox() {
+    postJson('/manage/sources/export', { t: 'tvbox' }, data => {
+        const content = data && data.content ? data.content : '';
+        if (!content) { warnToast('没有可导出的站源'); return; }
+        const blob = new Blob([content], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = data.filename || 'tvbox-sites.json';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        warnToast(`已导出 ${Number(data.count || 0)} 个源（TVBox 格式）`);
+    }, '导出失败');
+}
+function loadSubscriptions() {
+    getJson('/manage/sources/subscription/list', data => {
+        const items = Array.isArray(data.items) ? data.items : [];
+        $('#subscriptionList').html(items.map(buildSubscriptionCard).join('') || '<div class="empty-state">暂无订阅</div>');
+    }, '订阅读取失败');
+}
+function buildSubscriptionCard(item) {
+    const name = item.name || item.url || '';
+    const keys = Number(item.keys ? (Array.isArray(item.keys) ? item.keys.length : 0) : 0);
+    return `<div class="config-card">
+        <div class="config-main">
+            <div class="config-title-line"><strong>${escHtml(name)}</strong></div>
+            <div class="config-url">${escHtml(item.url || '')}</div>
+        </div>
+        <div class="config-actions">
+            <button class="file-action" type="button" onclick="updateSubscription('${escPath(item.id || '')}')">更新</button>
+            <button class="file-action danger" type="button" onclick="deleteSubscription('${escPath(item.id || '')}')">移除</button>
+        </div>
+    </div>`;
+}
+function importSubscription() {
+    const url = ($('#subscriptionImportUrl').val() || '').trim();
+    if (!url) { warnToast('请输入订阅地址'); return; }
+    warnToast('正在导入订阅');
+    postJson('/manage/sources/subscription/import', { url }, () => {
+        $('#subscriptionImportUrl').val('');
+        loadSubscriptions();
+        loadSourcesManage(true);
+        warnToast('订阅已导入');
+    }, '订阅导入失败');
+}
+function updateSubscription(id) {
+    warnToast('正在更新订阅');
+    postJson('/manage/sources/subscription/update', { id }, () => {
+        loadSubscriptions();
+        loadSourcesManage(true);
+        warnToast('订阅已更新');
+    }, '订阅更新失败');
+}
+function updateAllSubscriptions() {
+    warnToast('正在更新全部订阅');
+    postJson('/manage/sources/subscription/update-all', {}, () => {
+        loadSubscriptions();
+        loadSourcesManage(true);
+        warnToast('全部订阅已更新');
+    }, '订阅更新失败');
+}
+function deleteSubscription(id) {
+    showSourceConfirm('移除订阅', '确定移除该订阅及其名下独占的源吗？', () => {
+        postJson('/manage/sources/subscription/delete', { id }, () => {
+            loadSubscriptions();
+            loadSourcesManage(true);
+            warnToast('订阅已移除');
+        }, '移除失败');
+    });
 }
 function deleteAllSources() {
     if (!sourcesData.length) { warnToast('当前没有站源'); return; }

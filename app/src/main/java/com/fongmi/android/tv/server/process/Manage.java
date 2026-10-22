@@ -71,13 +71,15 @@ public class Manage implements Process {
 
     @Override
     public boolean isRequest(IHTTPSession session, String url) {
-        return url.startsWith("/manage/");
+        return url.startsWith("/manage/") || url.startsWith("/api/sources");
     }
 
     @Override
     public Response doResponse(IHTTPSession session, String url, Map<String, String> files) {
         try {
             ManageService.touch();
+            // spec 别名：/api/sources/* 归一化为 /manage/sources/* 走同一处理逻辑
+            if (url.startsWith("/api/sources")) url = "/manage/sources" + url.substring("/api/sources".length());
             if (url.equals("/manage/session")) return session(session.getParms());
             if (url.equals("/manage/security")) return security(session.getParms());
             if (url.equals("/manage/background/settings")) return backgroundSettings(session);
@@ -120,9 +122,21 @@ public class Manage implements Process {
                 case "/manage/sources/delete" -> sourcesDelete(session.getParms());
                 case "/manage/sources/delete-all" -> sourcesDeleteAll();
                 case "/manage/sources/order" -> sourcesOrder(session.getParms());
-                case "/manage/sources/export" -> sourcesExport();
+                case "/manage/sources/export" -> sourcesExport(session.getParms());
                 case "/manage/sources/test" -> sourcesTest(session.getParms());
                 case "/manage/sources/reset" -> sourcesReset();
+                case "/manage/sources/enable" -> sourcesSetOff(session.getParms(), false);
+                case "/manage/sources/disable" -> sourcesSetOff(session.getParms(), true);
+                case "/manage/sources/enable-all" -> sourcesSetOffAll(false);
+                case "/manage/sources/disable-all" -> sourcesSetOffAll(true);
+                case "/manage/sources/block-invalid" -> sourcesBlockInvalid();
+                case "/manage/sources/delete-invalid" -> sourcesDeleteInvalid();
+                case "/manage/sources/delete-duplicate" -> sourcesDeleteDuplicate();
+                case "/manage/sources/subscription/import" -> sourcesSubscriptionImport(session.getParms());
+                case "/manage/sources/subscription/list" -> sourcesSubscriptionList();
+                case "/manage/sources/subscription/update" -> sourcesSubscriptionUpdate(session.getParms());
+                case "/manage/sources/subscription/update-all" -> sourcesSubscriptionUpdateAll();
+                case "/manage/sources/subscription/delete" -> sourcesSubscriptionDelete(session.getParms());
                 default -> Nano.error(Status.NOT_FOUND, "Not found");
             };
         } catch (Exception e) {
@@ -1009,8 +1023,8 @@ public class Manage implements Process {
         return sources(Map.of());
     }
 
-    private Response sourcesExport() throws Exception {
-        JsonArray sites = SourceSetting.sites();
+    private Response sourcesExport(Map<String, String> params) throws Exception {
+        JsonArray sites = SourceSetting.enabledOnly();
         JsonObject root = new JsonObject();
         root.add("sites", sites);
         Config config = SourceSetting.config();
@@ -1023,6 +1037,13 @@ public class Manage implements Process {
         object.addProperty("content", root.toString());
         object.addProperty("count", sites.size());
         return json(object);
+    }
+
+    /**
+     * 导出 TVBox sites 格式（仅启用源），可供其他 TVBox 类软件使用。
+     */
+    private Response sourcesExportTvbox() throws Exception {
+        return sourcesExport();
     }
 
     private Response sourcesTest(Map<String, String> params) throws Exception {
@@ -1044,6 +1065,265 @@ public class Manage implements Process {
     private Response sourcesReset() throws Exception {
         SourceSetting.reset();
         return sources(Map.of());
+    }
+
+    /**
+     * 启停单个源（off 标记持久化在源 JSON 中）。
+     */
+    private Response sourcesSetOff(Map<String, String> params, boolean off) throws Exception {
+        String key = params.getOrDefault("key", "").trim();
+        if (TextUtils.isEmpty(key)) return Nano.error(Status.BAD_REQUEST, "Missing key");
+        JsonObject root = SourceSetting.configJson();
+        SourceSetting.apply(root, SourceSetting.setOff(SourceSetting.sites(root), List.of(key), off));
+        return sources(Map.of());
+    }
+
+    /**
+     * 全部启用 / 全部停用。
+     */
+    private Response sourcesSetOffAll(boolean off) throws Exception {
+        JsonObject root = SourceSetting.configJson();
+        JsonArray sites = SourceSetting.sites(root);
+        List<String> keys = new ArrayList<>();
+        for (String key : SourceSetting.keys(sites)) keys.add(key);
+        SourceSetting.apply(root, SourceSetting.setOff(sites, keys, off));
+        return sources(Map.of());
+    }
+
+    /**
+     * 屏蔽无效：现场测速后停用所有失败的源。
+     */
+    private Response sourcesBlockInvalid() throws Exception {
+        return sourcesSetOffInvalid(true);
+    }
+
+    /**
+     * 删除无效：现场测速后删除所有失败的源。
+     */
+    private Response sourcesDeleteInvalid() throws Exception {
+        return sourcesSetOffInvalid(false);
+    }
+
+    private Response sourcesSetOffInvalid(boolean off) throws Exception {
+        JsonObject root = SourceSetting.configJson();
+        JsonArray sites = SourceSetting.sites(root);
+        JsonArray tested = SourceSetting.test(sites, 4000);
+        List<String> keys = new ArrayList<>();
+        for (JsonElement element : tested) {
+            if (!element.isJsonObject()) continue;
+            if ("fail".equals(Json.safeString(element.getAsJsonObject(), "state"))) keys.add(Json.safeString(element.getAsJsonObject(), "key"));
+        }
+        JsonArray current = sites;
+        if (!off) {
+            for (String key : keys) current = SourceSetting.remove(current, key);
+        }
+        JsonArray result = off ? SourceSetting.setOff(sites, keys, true) : current;
+        SourceSetting.apply(root, result);
+        return sources(Map.of());
+    }
+
+    /**
+     * 按 api 地址去重，保留第一个。
+     */
+    private Response sourcesDeleteDuplicate() throws Exception {
+        JsonObject root = SourceSetting.configJson();
+        SourceSetting.apply(root, SourceSetting.dedupeByApi(SourceSetting.sites(root)));
+        return sources(Map.of());
+    }
+
+    /**
+     * 测速并可选按 快→慢→失败→未测速 自动排序持久化。
+     */
+    private Response sourcesTest(Map<String, String> params) throws Exception {
+        JsonArray sites = SourceSetting.sites();
+        String key = params.getOrDefault("key", "").trim();
+        if (!TextUtils.isEmpty(key)) {
+            JsonArray filtered = new JsonArray();
+            for (JsonElement element : sites) {
+                if (element.isJsonObject() && key.equals(Json.safeString(element.getAsJsonObject(), "key"))) filtered.add(element);
+            }
+            sites = filtered;
+        }
+        JsonArray tested = SourceSetting.test(sites, 4000);
+        if (bool(params.get("auto"), false)) {
+            List<String> keys = new ArrayList<>();
+            for (JsonElement element : tested) {
+                if (!element.isJsonObject()) continue;
+                JsonObject item = element.getAsJsonObject();
+                if ("ok".equals(Json.safeString(item, "state"))) keys.add(Json.safeString(item, "key"));
+            }
+            for (JsonElement element : tested) {
+                if (!element.isJsonObject()) continue;
+                JsonObject item = element.getAsJsonObject();
+                if ("fail".equals(Json.safeString(item, "state"))) keys.add(Json.safeString(item, "key"));
+            }
+            JsonObject root = SourceSetting.configJson();
+            SourceSetting.apply(root, SourceSetting.reorder(SourceSetting.sites(root), keys));
+        }
+        JsonObject object = new JsonObject();
+        object.addProperty("count", tested.size());
+        object.add("items", tested);
+        return json(object);
+    }
+
+    /**
+     * 导入订阅：下载（≤5MB）并解析合并，保存订阅 URL 与名称。
+     */
+    private Response sourcesSubscriptionImport(Map<String, String> params) throws Exception {
+        String url = params.getOrDefault("url", "").trim();
+        String name = params.getOrDefault("name", "").trim();
+        if (TextUtils.isEmpty(url) || !(url.startsWith("http://") || url.startsWith("https://"))) return Nano.error(Status.BAD_REQUEST, "订阅地址必须是 http/https");
+        String content = downloadSubscription(url);
+        JsonArray incoming = SourceSetting.parse(content);
+        if (incoming.size() == 0) return Nano.error(Status.BAD_REQUEST, "没有解析到站源");
+        JsonObject root = SourceSetting.configJson();
+        SourceSetting.apply(root, SourceSetting.merge(SourceSetting.sites(root), incoming, false));
+        saveSubscription(url, name, SourceSetting.keys(incoming));
+        return sourcesSubscriptionList();
+    }
+
+    private Response sourcesSubscriptionList() {
+        JsonObject object = new JsonObject();
+        object.add("items", Setting.getManageSubscriptions());
+        return json(object);
+    }
+
+    /**
+     * 更新单条订阅：新增/更新源，并移除该订阅下已消失且独占的源。
+     */
+    private Response sourcesSubscriptionUpdate(Map<String, String> params) throws Exception {
+        String id = params.getOrDefault("id", "").trim();
+        String url = params.getOrDefault("url", "").trim();
+        JsonArray subscriptions = Setting.getManageSubscriptions();
+        JsonObject subscription = findSubscription(subscriptions, id, url);
+        if (subscription == null) return Nano.error(Status.BAD_REQUEST, "订阅不存在");
+        String subUrl = Json.safeString(subscription, "url");
+        String content = downloadSubscription(subUrl);
+        JsonArray incoming = SourceSetting.parse(content);
+        if (incoming.size() == 0) return Nano.error(Status.BAD_REQUEST, "没有解析到站源");
+        List<String> newKeys = SourceSetting.keys(incoming);
+        List<String> oldKeys = subscriptionKeys(subscription);
+        JsonObject root = SourceSetting.configJson();
+        JsonArray current = SourceSetting.sites(root);
+        JsonArray merged = SourceSetting.merge(current, incoming, false);
+        // 仅删除：原属该订阅、现已消失、且不被其他订阅共享的源
+        List<String> gone = new ArrayList<>();
+        for (String key : oldKeys) {
+            if (newKeys.contains(key)) continue;
+            if (sharedByOther(Setting.getManageSubscriptions(), subscription, key)) continue;
+            gone.add(key);
+        }
+        for (String key : gone) merged = SourceSetting.remove(merged, key);
+        SourceSetting.apply(root, merged);
+        subscription.addProperty("keys", App.gson().toJson(newKeys));
+        Setting.putManageSubscriptions(subscriptions);
+        return sourcesSubscriptionList();
+    }
+
+    /**
+     * 全部订阅一键更新。
+     */
+    private Response sourcesSubscriptionUpdateAll() throws Exception {
+        JsonArray subscriptions = Setting.getManageSubscriptions();
+        for (JsonElement element : subscriptions) {
+            if (!element.isJsonObject()) continue;
+            String id = Json.safeString(element.getAsJsonObject(), "id");
+            sourcesSubscriptionUpdate(Map.of("id", id));
+        }
+        return sourcesSubscriptionList();
+    }
+
+    /**
+     * 删除订阅，默认同时删除其名下独占源。
+     */
+    private Response sourcesSubscriptionDelete(Map<String, String> params) throws Exception {
+        String id = params.getOrDefault("id", "").trim();
+        boolean removeSites = bool(params.get("removeSites"), true);
+        JsonArray subscriptions = Setting.getManageSubscriptions();
+        JsonObject subscription = findSubscription(subscriptions, id, "");
+        if (subscription == null) return Nano.error(Status.BAD_REQUEST, "订阅不存在");
+        if (removeSites) {
+            List<String> keys = subscriptionKeys(subscription);
+            JsonObject root = SourceSetting.configJson();
+            JsonArray current = SourceSetting.sites(root);
+            for (String key : keys) {
+                if (sharedByOther(subscriptions, subscription, key)) continue;
+                current = SourceSetting.remove(current, key);
+            }
+            SourceSetting.apply(root, current);
+        }
+        JsonArray result = new JsonArray();
+        for (JsonElement element : subscriptions) {
+            if (element.isJsonObject() && element.getAsJsonObject().equals(subscription)) continue;
+            result.add(element);
+        }
+        Setting.putManageSubscriptions(result);
+        return sourcesSubscriptionList();
+    }
+
+    private String downloadSubscription(String url) throws Exception {
+        try {
+            Response response = OkHttp.newCall(OkHttp.client(15000), url).execute();
+            if (!response.isSuccessful()) throw new Exception("下载失败：HTTP " + response.code());
+            String body = response.body() == null ? "" : response.body().string();
+            if (body.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 5 * 1024 * 1024) throw new Exception("订阅内容超过 5MB 限制");
+            if (body.trim().isEmpty()) throw new Exception("订阅内容为空");
+            return body;
+        } catch (Exception e) {
+            if (e.getMessage() != null && (e.getMessage().startsWith("下载失败") || e.getMessage().startsWith("订阅内容"))) throw e;
+            throw new Exception("下载失败：" + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+        }
+    }
+
+    private void saveSubscription(String url, String name, List<String> keys) {
+        JsonArray subscriptions = Setting.getManageSubscriptions();
+        for (JsonElement element : subscriptions) {
+            if (!element.isJsonObject()) continue;
+            JsonObject item = element.getAsJsonObject();
+            if (Json.safeString(item, "url").equals(url)) {
+                if (!TextUtils.isEmpty(name)) item.addProperty("name", name);
+                item.addProperty("keys", App.gson().toJson(keys));
+                Setting.putManageSubscriptions(subscriptions);
+                return;
+            }
+        }
+        JsonObject item = new JsonObject();
+        item.addProperty("id", String.valueOf(System.currentTimeMillis()));
+        item.addProperty("url", url);
+        item.addProperty("name", TextUtils.isEmpty(name) ? url : name);
+        item.addProperty("keys", App.gson().toJson(keys));
+        subscriptions.add(item);
+        Setting.putManageSubscriptions(subscriptions);
+    }
+
+    private JsonObject findSubscription(JsonArray subscriptions, String id, String url) {
+        for (JsonElement element : subscriptions) {
+            if (!element.isJsonObject()) continue;
+            JsonObject item = element.getAsJsonObject();
+            if ((!TextUtils.isEmpty(id) && Json.safeString(item, "id").equals(id)) || (!TextUtils.isEmpty(url) && Json.safeString(item, "url").equals(url))) return item;
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> subscriptionKeys(JsonObject subscription) {
+        try {
+            List<String> keys = App.gson().fromJson(Json.safeString(subscription, "keys"), new com.google.gson.reflect.TypeToken<List<String>>() {
+            }.getType());
+            return keys == null ? new ArrayList<>() : keys;
+        } catch (Exception e) {
+            return new ArrayList<>();
+        }
+    }
+
+    private boolean sharedByOther(JsonArray subscriptions, JsonObject self, String key) {
+        for (JsonElement element : subscriptions) {
+            if (!element.isJsonObject()) continue;
+            JsonObject item = element.getAsJsonObject();
+            if (item.equals(self)) continue;
+            if (subscriptionKeys(item).contains(key)) return true;
+        }
+        return false;
     }
 
     private String message(Exception e) {

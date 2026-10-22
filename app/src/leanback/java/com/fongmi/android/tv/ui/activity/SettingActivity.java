@@ -128,6 +128,7 @@ public class SettingActivity extends BaseActivity implements ConfigListener, Sit
         mBinding.recordSync.setOnClickListener(this::setRecordSync);
         mBinding.remotePublic.setOnClickListener(view -> RemoteSettingsDialog.show(this));
         mBinding.siteBlock.setOnClickListener(view -> SiteBlockDialog.show(this));
+        mBinding.sourceManage.setOnClickListener(view -> SiteSourceDialog.show(this));
         mBinding.codec.setOnClickListener(view -> CodecCapabilityDialog.show(this, null));
         mBinding.about.setOnClickListener(view -> AboutDialog.show(this, () -> Updater.create().force().start(this)));
         mBinding.restore.setOnClickListener(this::onRestore);

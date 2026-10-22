@@ -344,7 +344,14 @@
                         <div class="hero-actions">
                             <button class="md-btn md-btn-filled" onclick="showSourceImportDialog()" type="button">导入源</button>
                             <button class="md-btn md-btn-tonal" onclick="exportSources()" type="button">导出源</button>
+                            <button class="md-btn md-btn-tonal" onclick="exportSourcesTvbox()" type="button">导出 TVBox</button>
                             <button class="md-btn md-btn-tonal" onclick="testAllSources()" type="button">全部测速</button>
+                            <button class="md-btn md-btn-tonal" onclick="testAllSourcesAuto()" type="button">测速排序</button>
+                            <button class="md-btn md-btn-tonal" onclick="setAllSources(0)" type="button">全部启用</button>
+                            <button class="md-btn md-btn-tonal" onclick="setAllSources(1)" type="button">全部停用</button>
+                            <button class="md-btn md-btn-tonal" onclick="cleanInvalidSources('block-invalid')" type="button">屏蔽无效</button>
+                            <button class="md-btn md-btn-tonal" onclick="cleanInvalidSources('delete-invalid')" type="button">删除无效</button>
+                            <button class="md-btn md-btn-tonal" onclick="deleteDuplicateSources()" type="button">删除重复</button>
                             <button class="md-btn md-btn-tonal" onclick="deleteAllSources()" type="button">一键删除</button>
                             <button class="md-btn md-btn-tonal" onclick="loadSourcesManage(true)" type="button">刷新</button>
                         </div>
@@ -358,6 +365,19 @@
                         </div>
                     </div>
                     <div id="sourceList" class="config-list"></div>
+                    <div class="manage-card">
+                        <div class="card-line">
+                            <div class="manage-card-title">订阅（远程配置）</div>
+                            <div class="card-actions">
+                                <button class="md-btn md-btn-tonal md-btn-compact" onclick="updateAllSubscriptions()" type="button">全部更新</button>
+                            </div>
+                        </div>
+                        <div class="card-line">
+                            <input id="subscriptionImportUrl" class="md-input" type="url" placeholder="粘贴 http(s) 订阅地址（≤5MB）" />
+                            <button class="md-btn md-btn-filled md-btn-compact" onclick="importSubscription()" type="button">导入订阅</button>
+                        </div>
+                    </div>
+                    <div id="subscriptionList" class="config-list"></div>
                 </div>
             </section>
 

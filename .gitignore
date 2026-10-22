@@ -36,3 +36,4 @@ third_party/sources/
 # 内部文档（开发文档 / 审计报告 / 扩展指南）：不进公开仓库，
 # 本地保留，另有 CNB 私有仓的 docs 分支托管
 /docs-private/
+.box-agent/

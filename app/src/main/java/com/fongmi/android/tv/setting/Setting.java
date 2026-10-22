@@ -21,6 +21,7 @@ import com.fongmi.android.tv.utils.WebViewUtil;
 import com.github.catvod.crawler.DebugLogStore;
 import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.utils.Prefers;
+import com.github.catvod.utils.Json;
 import com.github.catvod.utils.Trans;
 import com.google.gson.reflect.TypeToken;
 
@@ -368,6 +369,22 @@ public class Setting {
         LinkedHashSet<String> result = new LinkedHashSet<>();
         if (keys != null) for (String key : keys) if (key != null && !key.trim().isEmpty()) result.add(key.trim());
         Prefers.put("csp_warmup_sites", App.gson().toJson(result));
+    }
+
+    /**
+     * 订阅列表：[{id,url,name,keys:[...]}]，供采集源订阅管理使用。
+     */
+    public static JsonArray getManageSubscriptions() {
+        try {
+            JsonElement element = Json.parse(Prefers.getString("manage_subscriptions", "[]"));
+            return element != null && element.isJsonArray() ? element.getAsJsonArray() : new JsonArray();
+        } catch (Exception e) {
+            return new JsonArray();
+        }
+    }
+
+    public static void putManageSubscriptions(JsonArray subscriptions) {
+        Prefers.put("manage_subscriptions", subscriptions == null ? "[]" : subscriptions.toString());
     }
 
     public static boolean isIncognito() {

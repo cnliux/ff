@@ -142,6 +142,12 @@
 WebHomeTV 是播放器壳子，不内置内容源，请使用合法配置。</string>
     <string name="about_check_update">检查更新</string>
     <string name="site_block">站点屏蔽</string>
+    <string name="source_manage">视频采集源管理</string>
+    <string name="source_manage_open_page">打开网页管理页</string>
+    <string name="source_manage_test_sort">全部测速并按速度排序</string>
+    <string name="source_manage_enable_all">全部启用</string>
+    <string name="source_manage_disable_all">全部停用</string>
+    <string name="source_manage_done">操作已提交，结果见网页管理页</string>
     <string name="playback_sync">观影记录同步</string>
     <string name="codec_capability_short">编解码能力</string>
     <string name="codec_capability_title">硬件编解码能力</string>

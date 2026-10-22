@@ -219,6 +219,12 @@ Build: %3$s / %4$s
 WebHomeTV is a player shell. It does not include content sources. Please use lawful configurations.</string>
     <string name="about_check_update">Check update</string>
     <string name="site_block">Blocked sites</string>
+    <string name="source_manage">Video source management</string>
+    <string name="source_manage_open_page">Open web manage page</string>
+    <string name="source_manage_test_sort">Test all and sort by speed</string>
+    <string name="source_manage_enable_all">Enable all sources</string>
+    <string name="source_manage_disable_all">Disable all sources</string>
+    <string name="source_manage_done">Action submitted, see web manage page for results</string>
     <string name="playback_sync">Viewing record sync</string>
     <string name="codec_capability_short">Codec caps</string>
     <string name="codec_capability_title">Hardware codec capabilities</string>
