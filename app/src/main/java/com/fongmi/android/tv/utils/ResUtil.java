@@ -8,6 +8,7 @@ import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
+import android.os.LocaleList;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.view.Display;
@@ -114,20 +115,39 @@ public class ResUtil {
         return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, dp, getDisplayMetrics());
     }
 
+    // Application 的 locale 在进程启动时固定，会话内切换语言只会重建 Activity；
+    // Toast/通知等经 App 上下文取串会停留在旧语言，这里按当前语言缓存一个资源上下文。
+    private static volatile Context languageContext;
+    private static volatile String languageKey;
+
+    private static Context localized() {
+        String language = com.fongmi.android.tv.setting.Setting.getLanguage();
+        Context cached = languageContext;
+        if (cached != null && language.equals(languageKey)) return cached;
+        Configuration config = new Configuration(App.get().getResources().getConfiguration());
+        java.util.Locale locale = java.util.Locale.forLanguageTag(language);
+        config.setLocale(locale);
+        config.setLocales(new LocaleList(locale));
+        Context result = App.get().createConfigurationContext(config);
+        languageContext = result;
+        languageKey = language;
+        return result;
+    }
+
     public static String getString(@StringRes int resId) {
-        return App.get().getResources().getString(resId);
+        return localized().getResources().getString(resId);
     }
 
     public static String getString(@StringRes int resId, Object... formatArgs) {
-        return App.get().getResources().getString(resId, formatArgs);
+        return localized().getResources().getString(resId, formatArgs);
     }
 
     public static String[] getStringArray(@ArrayRes int resId) {
-        return App.get().getResources().getStringArray(resId);
+        return localized().getResources().getStringArray(resId);
     }
 
     public static TypedArray getTypedArray(@ArrayRes int resId) {
-        return App.get().getResources().obtainTypedArray(resId);
+        return localized().getResources().obtainTypedArray(resId);
     }
 
     public static Drawable getDrawable(@DrawableRes int resId) {

@@ -97,6 +97,7 @@ public class App extends Application implements Application.ActivityLifecycleCal
     @Override
     public void onCreate() {
         super.onCreate();
+        installSpiderCrashGuard();
         Prefers.remove("theme_color");
         Prefers.remove("wall_color");
         Setting.restoreClassicGreenWall();
@@ -111,6 +112,36 @@ public class App extends Application implements Application.ActivityLifecycleCal
         ProxySetting.apply();
         registerActivityLifecycleCallbacks(this);
         post(this::startBackgroundServices, 1200);
+    }
+
+    /**
+     * 第三方爬虫 jar 会自建线程（Init 线程池等），其中的类校验失败（VerifyError/NoClassDefFoundError）
+     * 发生在应用调用栈之外，try/catch 兜不住，会经默认 handler 直接杀掉整个应用。
+     * 这里包一层默认 handler：仅吞掉堆栈源自 com.github.catvod.spider.*（jar 独有包）的后台线程错误并记日志，
+     * 其余异常（含主线程）原样交给 CustomActivityOnCrash。
+     */
+    private void installSpiderCrashGuard() {
+        Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {
+            if (thread != null && thread != Looper.getMainLooper().getThread() && isSpiderJarError(error)) {
+                SpiderDebug.log("crash", "swallowed spider-jar error thread=%s error=%s", thread.getName(), String.valueOf(error));
+                return;
+            }
+            if (previous != null) previous.uncaughtException(thread, error);
+        });
+    }
+
+    private boolean isSpiderJarError(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            for (StackTraceElement frame : current.getStackTrace()) {
+                String className = frame.getClassName();
+                if (className != null && className.startsWith("com.github.catvod.spider.")) return true;
+            }
+            if (current.getCause() == current) break;
+            current = current.getCause();
+        }
+        return false;
     }
 
     private void startBackgroundServices() {
