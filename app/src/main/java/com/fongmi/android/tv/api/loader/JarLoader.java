@@ -168,6 +168,13 @@ public class JarLoader {
         return false;
     }
 
+    /**
+     * jar 是否已加载（只查缓存，不触发下载/信任确认）。供源测速等内容探测使用。
+     */
+    public boolean isLoaded(String jar) {
+        return jar != null && !jar.isEmpty() && loaders.containsKey(Util.md5(jar));
+    }
+
     public DexClassLoader dex(String jar) {
         try {
             String jaKey = Util.md5(jar);

@@ -5,9 +5,12 @@ import android.text.TextUtils;
 import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.api.Decoder;
 import com.fongmi.android.tv.api.config.VodConfig;
+import com.fongmi.android.tv.api.loader.BaseLoader;
 import com.fongmi.android.tv.bean.Config;
 import com.fongmi.android.tv.impl.Callback;
 import com.fongmi.android.tv.utils.UrlUtil;
+import com.github.catvod.crawler.Spider;
+import com.github.catvod.crawler.SpiderNull;
 import com.github.catvod.net.OkHttp;
 import com.github.catvod.utils.Json;
 import com.google.gson.JsonArray;
@@ -18,6 +21,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -41,6 +45,8 @@ public class SourceSetting {
     private static final String OFF = "off";
     private static final int TEST_THREADS = 16;
     private static final long TEST_TIMEOUT = 4000;
+    // csp_ 源内容探测预算：爬虫内部 HTTP 不受本请求超时控制，需自行限时。
+    private static final long SPIDER_TIMEOUT = 8000;
     private static String cachedUrl = "";
     private static JsonObject cachedObject;
 
@@ -390,7 +396,8 @@ public class SourceSetting {
     }
 
     /**
-     * 测速，优先探测 api，其次探测 jar，都没有则跳过。
+     * 测速：csp_ 爬虫源在 jar 已加载时直接调用爬虫 homeContent 做内容探测，否则探测 jar 可达性；
+     * 其余源优先探测 http api，其次探测 jar，都没有则跳过。
      */
     public static JsonArray test(JsonArray sites, long timeout) {
         JsonArray result = new JsonArray();
@@ -401,6 +408,7 @@ public class SourceSetting {
         int size = sites.size();
         ExecutorService pool = Executors.newFixedThreadPool(Math.min(TEST_THREADS, size));
         OkHttpClient client = OkHttp.client(timeout);
+        long budget = Math.max(timeout, SPIDER_TIMEOUT) + 3000;
         try {
             List<Future<JsonObject>> futures = new ArrayList<>();
             List<JsonObject> items = new ArrayList<>();
@@ -412,7 +420,7 @@ public class SourceSetting {
             }
             for (int i = 0; i < futures.size(); i++) {
                 try {
-                    result.add(futures.get(i).get(timeout + 3000, TimeUnit.MILLISECONDS));
+                    result.add(futures.get(i).get(budget, TimeUnit.MILLISECONDS));
                 } catch (Exception e) {
                     JsonObject site = items.get(i);
                     JsonObject item = new JsonObject();
@@ -461,6 +469,15 @@ public class SourceSetting {
     private static JsonObject probe(OkHttpClient client, JsonObject site, String base, String globalSpider) {
         String key = Json.safeString(site, KEY);
         String name = Json.safeString(site, NAME);
+        String api = Json.safeString(site, "api");
+        // csp_ 爬虫源：jar 已加载时直接调用爬虫内容测活（借鉴 vgg 的内容级测速），
+        // 未加载时不触发下载/信任确认，退回探测 jar 可达性。
+        if (api.startsWith("csp_")) {
+            String jar = spiderJar(Json.safeString(site, "jar"), base, globalSpider);
+            if (!TextUtils.isEmpty(jar) && BaseLoader.get().isJarLoaded(jar)) {
+                return probeSpider(key, name, api, Json.safeString(site, "ext"), jar);
+            }
+        }
         String url = probeUrl(site, base, globalSpider);
         JsonObject item = new JsonObject();
         item.addProperty(KEY, key);
@@ -486,6 +503,83 @@ public class SourceSetting {
         }
     }
 
+    /**
+     * 爬虫内容探测：实例化 spider 并调用 homeContent，成功返回分类数，失败返回原因。
+     * 爬虫代码的耗时/阻塞不受 OkHttp 超时控制，放到守护线程里限时等待。
+     */
+    private static JsonObject probeSpider(String key, String name, String api, String ext, String jar) {
+        JsonObject item = new JsonObject();
+        item.addProperty(KEY, key);
+        item.addProperty(NAME, name.isEmpty() ? key : name);
+        CountDownLatch latch = new CountDownLatch(1);
+        String[] holder = new String[2];
+        Thread worker = new Thread(() -> {
+            try {
+                Spider spider = BaseLoader.get().getSpider(key, api, ext, jar);
+                if (spider instanceof SpiderNull) holder[1] = "爬虫类不可用";
+                else holder[0] = spider.homeContent(true);
+            } catch (Throwable e) {
+                holder[1] = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            } finally {
+                latch.countDown();
+            }
+        }, "source-test-" + key);
+        worker.setDaemon(true);
+        worker.start();
+        long start = System.currentTimeMillis();
+        boolean done;
+        try {
+            done = latch.await(SPIDER_TIMEOUT, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            done = false;
+        }
+        long cost = System.currentTimeMillis() - start;
+        if (!done) {
+            item.addProperty("state", "fail");
+            item.addProperty("cost", cost);
+            item.addProperty("message", "爬虫超时");
+            return item;
+        }
+        if (holder[1] != null) {
+            item.addProperty("state", "fail");
+            item.addProperty("cost", cost);
+            item.addProperty("message", holder[1]);
+            return item;
+        }
+        String result = holder[0];
+        if (TextUtils.isEmpty(result)) {
+            item.addProperty("state", "fail");
+            item.addProperty("cost", cost);
+            item.addProperty("message", "首页返回为空");
+            return item;
+        }
+        JsonElement element;
+        try {
+            element = Json.parse(result);
+        } catch (Exception e) {
+            element = null;
+        }
+        if (element == null || !element.isJsonObject()) {
+            item.addProperty("state", "fail");
+            item.addProperty("cost", cost);
+            item.addProperty("message", "首页内容无效");
+            return item;
+        }
+        JsonObject home = element.getAsJsonObject();
+        int classes = home.has("class") && home.get("class").isJsonArray() ? home.getAsJsonArray("class").size() : -1;
+        if (classes == 0) {
+            item.addProperty("state", "fail");
+            item.addProperty("cost", cost);
+            item.addProperty("message", "无分类数据");
+            return item;
+        }
+        item.addProperty("state", "ok");
+        item.addProperty("cost", cost);
+        item.addProperty("message", classes > 0 ? "分类 " + classes : "ok");
+        return item;
+    }
+
     private static String probeUrl(JsonObject site) {
         return probeUrl(site, "", "");
     }
@@ -502,11 +596,12 @@ public class SourceSetting {
     }
 
     /**
-     * 把 jar 地址解析为可测速的 http 地址：相对路径按接口地址解析，assets/data 本地地址返回空。
+     * 把 jar 地址解析为可测速的 http 地址：去掉 ;md5;/;sha256; 校验后缀（否则会被当作路径请求导致 404），
+     * 相对路径按接口地址解析，assets/data 本地地址返回空。
      */
     private static String resolveJar(String jar, String base) {
         if (TextUtils.isEmpty(jar)) return "";
-        jar = jar.trim();
+        jar = stripHash(jar.trim());
         if (jar.startsWith("assets://") || jar.startsWith("data:") || jar.startsWith("asset://")) return "";
         if (isHttp(jar)) return jar;
         if (TextUtils.isEmpty(base)) return "";
@@ -516,6 +611,30 @@ public class SourceSetting {
         } catch (Exception e) {
             return "";
         }
+    }
+
+    /**
+     * 按 VodConfig 加载时的口径解析 csp_ 源生效的 jar 地址（空 jar 回退全局 spider，assets 保留原样），
+     * 以便与 JarLoader 缓存 key 对齐，判断是否已加载。
+     */
+    private static String spiderJar(String jar, String base, String globalSpider) {
+        String raw = TextUtils.isEmpty(jar) ? globalSpider : jar;
+        raw = raw.trim();
+        if (TextUtils.isEmpty(raw)) return "";
+        if (raw.startsWith("assets://") || raw.startsWith("asset://")) return raw;
+        if (TextUtils.isEmpty(base)) return raw;
+        try {
+            return UrlUtil.resolve(base, raw);
+        } catch (Exception e) {
+            return raw;
+        }
+    }
+
+    private static String stripHash(String jar) {
+        int i = jar.indexOf(";sha256;");
+        if (i >= 0) return jar.substring(0, i);
+        i = jar.indexOf(";md5;");
+        return i >= 0 ? jar.substring(0, i) : jar;
     }
 
     private static boolean isHttp(String url) {

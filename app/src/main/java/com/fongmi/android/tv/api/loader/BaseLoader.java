@@ -94,6 +94,13 @@ public class BaseLoader {
         return jarLoader.dex(jar);
     }
 
+    /**
+     * csp_ 源的 jar 是否已加载；已加载时测速可直接调用爬虫内容探测，未加载时避免批量测速触发下载/信任弹窗。
+     */
+    public boolean isJarLoaded(String jar) {
+        return jarLoader.isLoaded(jar);
+    }
+
     public JSONObject jsonExt(String key, LinkedHashMap<String, String> jxs, String url) throws Throwable {
         return jarLoader.jsonExt(key, jxs, url);
     }
