@@ -115,17 +115,24 @@ public class JarLoader {
                 File file = Download.create(jar, Path.jar(jar)).get();
                 if (Path.exists(file) && (hash.isEmpty() || verify(file, hashType, hash))) load(key, file);
             } else if (jar.startsWith("https")) {
-                if (hash.isEmpty()) {
-                    SpiderDebug.log("jar", "rejected remote jar without ;sha256;/;md5; key=%s url=%s", key, jar);
-                    return;
-                }
                 File file = Download.create(jar, Path.jar(jar)).get();
-                if (!verify(file, hashType, hash)) {
-                    Path.clear(file);
-                    SpiderDebug.log("jar", "hash mismatch key=%s url=%s type=%s", key, jar, hashType);
+                if (!Path.exists(file)) {
+                    SpiderDebug.log("jar", "remote jar unavailable key=%s url=%s", key, jar);
                     return;
                 }
-                if (!DependencyTrust.confirm("JAR", jar, hashType, hash, file)) {
+                // TVBox/vgg 口径：远程 jar 的 ;md5;/;sha256; 只是提示，上游 jar 轮换会让配置里的哈希过期，
+                // 真正执行的是下载到的内容。哈希缺失或不匹配都不再拒绝加载，改为以「下载到的实际字节」作为
+                // 信任确认对象（首次仍需在设备上确认一次，确认记录按实际哈希缓存）。
+                String trustType = hash.isEmpty() ? "md5" : hashType;
+                String trustHash = hash.isEmpty() ? Util.md5(file) : hash;
+                if (!hash.isEmpty() && !verify(file, hashType, hash)) {
+                    trustType = "md5";
+                    trustHash = Util.md5(file);
+                    SpiderDebug.log("jar", "hash mismatch (stale config?), continuing with downloaded jar key=%s url=%s type=%s expected=%s actual=%s", key, jar, hashType, hash, trustHash);
+                } else if (hash.isEmpty()) {
+                    SpiderDebug.log("jar", "remote jar without hash, trusting computed md5 key=%s url=%s md5=%s", key, jar, trustHash);
+                }
+                if (!DependencyTrust.confirm("JAR", jar, trustType, trustHash, file)) {
                     SpiderDebug.log("jar", "remote jar not trusted key=%s url=%s", key, jar);
                     return;
                 }
