@@ -241,8 +241,9 @@ public class HomeWebController {
             if ("file".equalsIgnoreCase(scheme)) return isAllowedFilePath(uri.getPath());
             String host = uri.getHost();
             if ("127.0.0.1".equals(host) || "localhost".equalsIgnoreCase(host) || "::1".equals(host)) {
-                int port = uri.getPort();
-                if (port == -1 || port == Proxy.getPort()) return true;
+                // 与 UrlSafety.isLoopbackOrigin 对齐：缺省端口(80)必须拒绝，否则任何其它应用
+                // 绑定 127.0.0.1:80 的服务都会被当成可信首页并收到 bridge token。
+                if (uri.getPort() == Proxy.getPort()) return true;
             }
             if (sameOrigin(url, VodConfig.getUrl())) return true;
             return matchesAllowedOrigin(url);

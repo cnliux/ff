@@ -58,7 +58,11 @@ public class ServerAuth {
     }
 
     private static String remoteIp(NanoHTTPD.IHTTPSession session) {
-        return session.getHeaders().get("remote-addr");
+        String ip = session.getHeaders().get("remote-addr");
+        // NanoHTTPD 绑定 :: 时 IPv4 客户端上报为 ::ffff:a.b.c.d，前缀匹配会漏判 LAN/本地，
+        // 统一在此还原为点分四段，isLocalIp/isLanIp 都受益。仅格式还原，不改变安全边界。
+        if (ip != null && ip.startsWith("::ffff:") && ip.indexOf('.') > 0) ip = ip.substring("::ffff:".length());
+        return ip;
     }
 
     private static String token() {

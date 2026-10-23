@@ -23,9 +23,21 @@ public class WebHomeInlineVodStore {
     public static final String KEY = "webhome_inline";
     private static final String HLS_FORMAT = "application/x-mpegURL";
 
-    private static final Map<String, Entry> ITEMS = new ConcurrentHashMap<>();
-    private static final Map<String, HeaderSpec> URL_HEADERS = new ConcurrentHashMap<>();
-    private static final Map<String, EpisodeSpec> URL_EPISODES = new ConcurrentHashMap<>();
+    private static final int MAX_ITEMS = 32;
+    // 播放页拉起后条目即失去用途；保留有界 LRU 供拉起窗口内回查，
+    // 防止页面反复 playVodInline（或伪造 id 覆盖）时无上限钉住整页 VOD JSON。
+    private static final Map<String, Entry> ITEMS = bounded();
+    private static final Map<String, HeaderSpec> URL_HEADERS = bounded();
+    private static final Map<String, EpisodeSpec> URL_EPISODES = bounded();
+
+    private static <T> Map<String, T> bounded() {
+        return java.util.Collections.synchronizedMap(new java.util.LinkedHashMap<>(16, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, T> eldest) {
+                return size() > MAX_ITEMS;
+            }
+        });
+    }
 
     public static String put(JsonObject payload) {
         return put(payload, null);

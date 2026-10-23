@@ -43,6 +43,9 @@ public class Clock {
     }
 
     public void start() {
+        // HomeActivity 等调用方直接 start()（ onPause 未 stop），重复 start 必须
+        // 先取消旧 Timer，否则每次 onResume 泄漏一个每秒唤醒主线程的定时线程。
+        if (timer != null) timer.cancel();
         timer = new Timer();
         timer.schedule(new TimerTask() {
             @Override

@@ -19,8 +19,10 @@ import com.google.gson.JsonObject;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -320,12 +322,12 @@ public class SourceSetting {
      */
     public static JsonArray dedupeByApi(JsonArray current) {
         JsonArray result = new JsonArray();
-        List<String> seen = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
         for (JsonElement element : current) {
             if (!element.isJsonObject()) continue;
             String api = Json.safeString(element.getAsJsonObject(), "api").trim();
-            if (!TextUtils.isEmpty(api) && seen.contains(api)) continue;
-            if (!TextUtils.isEmpty(api)) seen.add(api);
+            // List.contains 对 1000+ 站源是 O(n²)；空 api 不参与去重，保持原语义。
+            if (!TextUtils.isEmpty(api) && !seen.add(api)) continue;
             result.add(element);
         }
         return result;
@@ -400,15 +402,29 @@ public class SourceSetting {
      * 其余源优先探测 http api，其次探测 jar，都没有则跳过。
      */
     public static JsonArray test(JsonArray sites, long timeout) {
+        return test("", sites, timeout);
+    }
+
+    /**
+     * 目标接口的站源测速。相对路径 jar 与全局 spider 必须按 target 接口解析，
+     * 否则管理非当前接口时会拿错基准地址，jar 探测与内容探测的 key 都对不上。
+     */
+    public static JsonArray test(String target, JsonArray sites, long timeout) {
         JsonArray result = new JsonArray();
         if (sites == null || sites.isEmpty()) return result;
         // 带 jar 的 csp_ 爬虫源：解析出真实 jar 地址再测速（lambda 引用需 effectively final）
-        final String base = currentBaseUrl();
-        final String globalSpider = currentGlobalSpider();
+        final String base = targetBaseUrl(target);
+        final String globalSpider = targetGlobalSpider(target);
         int size = sites.size();
         ExecutorService pool = Executors.newFixedThreadPool(Math.min(TEST_THREADS, size));
         OkHttpClient client = OkHttp.client(timeout);
-        long budget = Math.max(timeout, SPIDER_TIMEOUT) + 3000;
+        // 全批次共享一个总截止时间：旧写法给每个 future 各一份预算，站源多且普遍卡住时
+        // 顺序 get 会把耗时叠加成 数量 × 预算，长时间占死管理页请求线程与测速线程池。
+        // 按批次数放大预算（每批最长一个探测周期），并封顶在 60 秒——短于管理页转发跳的
+        // 65 秒与前端 90 秒超时，保证前端拿到的是完整 JSON 而不是被掐断的连接。
+        long perProbe = Math.max(timeout, SPIDER_TIMEOUT);
+        long rounds = (size + TEST_THREADS - 1) / TEST_THREADS;
+        long deadline = System.currentTimeMillis() + Math.min(perProbe * rounds + 3000, 60000);
         try {
             List<Future<JsonObject>> futures = new ArrayList<>();
             List<JsonObject> items = new ArrayList<>();
@@ -420,15 +436,18 @@ public class SourceSetting {
             }
             for (int i = 0; i < futures.size(); i++) {
                 try {
-                    result.add(futures.get(i).get(budget, TimeUnit.MILLISECONDS));
+                    long remaining = Math.max(deadline - System.currentTimeMillis(), 0);
+                    result.add(futures.get(i).get(remaining, TimeUnit.MILLISECONDS));
                 } catch (Exception e) {
+                    // 批次截止未跑完的站源记为“未测”而不是失败：屏蔽/删除无效源只针对
+                    // 真实探测失败的站，否则大列表下超时会把没测到的健康源一起误杀。
                     JsonObject site = items.get(i);
                     JsonObject item = new JsonObject();
                     item.addProperty(KEY, Json.safeString(site, KEY));
                     item.addProperty(NAME, Json.safeString(site, NAME));
-                    item.addProperty("state", "fail");
+                    item.addProperty("state", "skip");
                     item.addProperty("cost", -1);
-                    item.addProperty("message", "超时");
+                    item.addProperty("message", "批次超时未测");
                     result.add(item);
                 }
             }
@@ -439,11 +458,11 @@ public class SourceSetting {
     }
 
     /**
-     * 当前启用接口的地址，用于解析相对路径 jar；无接口时返回空。
+     * 目标接口的地址，用于解析相对路径 jar；无接口时返回空。
      */
-    private static String currentBaseUrl() {
+    private static String targetBaseUrl(String target) {
         try {
-            Config config = config();
+            Config config = config(target);
             return config.isEmpty() ? "" : config.getUrl();
         } catch (Exception e) {
             return "";
@@ -451,11 +470,11 @@ public class SourceSetting {
     }
 
     /**
-     * 当前接口配置的全局 spider 地址，用于无 jar 字段的 csp_ 源回退测速。
+     * 目标接口配置的全局 spider 地址，用于无 jar 字段的 csp_ 源回退测速。
      */
-    private static String currentGlobalSpider() {
+    private static String targetGlobalSpider(String target) {
         try {
-            return Json.safeString(configJson(), "spider");
+            return Json.safeString(configJson(target), "spider");
         } catch (Exception e) {
             return "";
         }
@@ -475,7 +494,7 @@ public class SourceSetting {
         if (api.startsWith("csp_")) {
             String jar = spiderJar(Json.safeString(site, "jar"), base, globalSpider);
             if (!TextUtils.isEmpty(jar) && BaseLoader.get().isJarLoaded(jar)) {
-                return probeSpider(key, name, api, Json.safeString(site, "ext"), jar);
+                return probeSpider(key, name, api, extText(site.get("ext")), jar);
             }
         }
         String url = probeUrl(site, base, globalSpider);
@@ -664,5 +683,19 @@ public class SourceSetting {
         if (element == null || element.isJsonNull()) return "";
         String value = element.toString();
         return value.length() > 200 ? value.substring(0, 200) + "…" : value;
+    }
+
+    /**
+     * 按 {@link com.fongmi.android.tv.gson.ExtAdapter} + Site 加载口径取 ext：
+     * 基本类型取字符串，对象/数组取其 JSON 文本（Json.safeString 对后两者只会得到空串，
+     * 会把内联配置爬虫初始化成无配置状态，测出的失败是假的）。
+     */
+    private static String extText(JsonElement element) {
+        if (element == null || element.isJsonNull()) return "";
+        String ext;
+        if (element.isJsonPrimitive()) ext = element.getAsString();
+        else if (element.isJsonArray() || element.isJsonObject()) ext = element.toString();
+        else return "";
+        return UrlUtil.convert(ext).trim();
     }
 }

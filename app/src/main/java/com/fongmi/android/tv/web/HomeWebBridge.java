@@ -30,6 +30,7 @@ import com.fongmi.android.tv.web.ext.WebHomeExtensionRegistry;
 import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.utils.Json;
 import com.github.catvod.utils.Prefers;
+import com.github.catvod.utils.Util;
 import com.google.gson.JsonObject;
 
 import java.net.URI;
@@ -46,7 +47,9 @@ public class HomeWebBridge {
     private static final int INLINE_LIMIT = 12000;
     private static final int CHUNK_SIZE = 60000;
     private static final int DIAG_LIMIT = 80;
-    private static final List<String> MAIN_FRAME_ONLY = List.of("app.history", "site.info", "config.info", "device.info");
+    // Token 豁免白名单（反转模型）：默认全部方法都要 bridge token，只有这些
+    // 无特权、无数据外泄面的方法可被文档内任意帧（含跨源 iframe）调用。
+    private static final List<String> NO_TOKEN_METHODS = List.of("ext.info", "ext.log", "ext.toast", "ui.setToolbar", "navigation.back", "navigation.reload");
     private static final Map<String, Integer> CALL_COUNTS = new ConcurrentHashMap<>();
     private static final List<String> EVENTS = Collections.synchronizedList(new ArrayList<>());
 
@@ -59,7 +62,14 @@ public class HomeWebBridge {
         this.controller = controller;
         this.activity = activity;
         this.webView = webView;
-        this.results = new ConcurrentHashMap<>();
+        // 大结果暂存表必须有界：页面不配合 clearResult（中途导航走 / 从不 hydrate）时，
+        // 每条最多 32MB 的字符串会永久钉住；LRU 上限兜底，旧结果本就无人再取。
+        this.results = java.util.Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
+                return size() > 8;
+            }
+        });
     }
 
     @JavascriptInterface
@@ -185,10 +195,12 @@ public class HomeWebBridge {
 
     private void guard(String method, JsonObject payload, boolean trusted) {
         if (trusted) {
-            // addJavascriptInterface exposes the bridge to every frame; reads that return device or
-            // configuration data must present the per-load main-frame bridge token, so a cross-origin
-            // iframe inside a trusted page cannot read them.
-            if (MAIN_FRAME_ONLY.contains(method) || sensitiveRequest(payload)) requireBridgeToken(payload);
+            // addJavascriptInterface exposes the bridge to every frame; anything beyond pure UI
+            // must present the per-load main-frame bridge token, so a cross-origin iframe inside
+            // a trusted page cannot reach network, media, cloud-drive credentials or preference
+            // storage through it. The SDK attaches __tk from window.__fmBridgeToken, which the
+            // controller injects only into the main frame.
+            if (!NO_TOKEN_METHODS.contains(method) || sensitiveRequest(payload)) requireBridgeToken(payload);
             return;
         }
         if ("player.playUrl".equals(method) || "pan.play".equals(method)) validatePlayable(Json.safeString(payload, "url"));
@@ -348,7 +360,9 @@ public class HomeWebBridge {
     private String cacheKey(JsonObject payload) {
         String rule = sanitize(Json.safeString(payload, "rule"));
         String key = sanitize(Json.safeString(payload, "key"));
-        String originHash = Integer.toHexString(controller.getTrustedOrigin().hashCode());
+        // String.hashCode 只有 32 位且算法公开，异源构造碰撞即可读写对方的缓存命名空间；
+        // 换 MD5 全量散列，冲突需要像 3A 碰撞那样反查，成本不可比。
+        String originHash = Util.md5(controller.getTrustedOrigin());
         return "cache_" + originHash + "_" + (TextUtils.isEmpty(rule) ? "" : rule + "_") + key;
     }
 

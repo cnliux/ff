@@ -41,16 +41,18 @@ public class WebHomeExtensionRegistry {
     private final List<String> events;
     private final Object lock;
 
-    private List<WebHomeExtension> globalExtensions;
-    private JsonElement globalSources;
-    private String globalBaseUrl;
+    private volatile List<WebHomeExtension> globalExtensions;
+    // setGlobalSources 在 lock 内写、hasGlobalSources/统计路径无锁读；不 volatile
+    // 时其他线程可能长期读到旧引用，导致全局扩展集与 installed 状态不一致。
+    private volatile JsonElement globalSources;
+    private volatile String globalBaseUrl;
     private String globalSignature;
     private String lastSiteKey;
-    private boolean globalLoaded;
-    private int lastMatchedCount;
-    private int lastReadyCount;
+    private volatile boolean globalLoaded;
+    private volatile int lastMatchedCount;
+    private volatile int lastReadyCount;
     private int lastSourceCount;
-    private long lastPreparedAt;
+    private volatile long lastPreparedAt;
 
     private WebHomeExtensionRegistry() {
         this.ready = new ConcurrentHashMap<>();

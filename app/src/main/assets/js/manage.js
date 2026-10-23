@@ -2058,8 +2058,10 @@ function loadSourcesManage(force = false) {
 function getSource(path, ok, fail) {
     return getJson(path + (path.includes('?') ? '&' : '?') + 'api=' + encodeURIComponent(sourceTarget || ''), ok, fail);
 }
-function postSource(path, params, ok, fail) {
-    return postJson(path, { ...(remoteManageActive() ? { target } : {}), api: sourceTarget || '', ...(params || {}) }, ok, fail);
+// timeout 必须透传：站源测速 / 清理无效源在服务端要跑完整轮探测（最长约 80 秒），
+// 丢掉该参数会退回 REQUEST_TIMEOUT（12 秒），服务端仍在跑但浏览器先报错。
+function postSource(path, params, ok, fail, timeout) {
+    return postJson(path, { ...(remoteManageActive() ? { target } : {}), api: sourceTarget || '', ...(params || {}) }, ok, fail, timeout);
 }
 function renderSourceTargets(configs) {
     const items = Array.isArray(configs) ? configs : [];
@@ -2164,13 +2166,15 @@ function testAllSourcesAuto() {
         (Array.isArray(data.items) ? data.items : []).forEach(item => { sourceTestResults[item.key] = item; });
         loadSourcesManage(true);
         warnToast('测速完成，已按速度排序');
-    }, '测速失败');
+    }, '测速失败', SOURCE_TEST_TIMEOUT);
 }
 function cleanInvalidSources(mode) {
-    postJson(`/manage/sources/${mode}`, {}, data => {
+    // 该接口内部要先跑完一轮测速才能判定无效源，耗时与「全部测速」同级；
+    // 用 postSource 既带上测速超时，也把当前接口（api）一并传给服务端。
+    postSource(`/manage/sources/${mode}`, {}, data => {
         applySourcesData(data);
         warnToast(mode === 'block-invalid' ? '已屏蔽无效源' : '已删除无效源');
-    }, '操作失败');
+    }, '操作失败', SOURCE_TEST_TIMEOUT);
 }
 function deleteDuplicateSources() {
     postSource('/manage/sources/delete-duplicate', {}, data => {
@@ -2227,19 +2231,23 @@ function importSubscription() {
 }
 function updateSubscription(id) {
     warnToast('正在更新订阅');
+    // 订阅更新在服务端要做 15 秒下载 + 解析，12 秒默认超时不够。
     postSource('/manage/sources/subscription/update', { id }, () => {
         loadSubscriptions();
         loadSourcesManage(true);
         warnToast('订阅已更新');
-    }, '订阅更新失败');
+    }, '订阅更新失败', SOURCE_TEST_TIMEOUT);
 }
 function updateAllSubscriptions() {
     warnToast('正在更新全部订阅');
-    postSource('/manage/sources/subscription/update-all', {}, () => {
+    postSource('/manage/sources/subscription/update-all', {}, data => {
         loadSubscriptions();
         loadSourcesManage(true);
-        warnToast('全部订阅已更新');
-    }, '订阅更新失败');
+        // 服务端已改为单条失败不中断整批，失败清单在 failed 里单独回传。
+        const failed = (data && Array.isArray(data.failed)) ? data.failed : [];
+        if (failed.length) warnToast(`更新完成，${failed.length} 条失败：` + failed.map(item => item.name || item.id).join('、'));
+        else warnToast('全部订阅已更新');
+    }, '订阅更新失败', SOURCE_TEST_TIMEOUT);
 }
 function deleteSubscription(id) {
     showSourceConfirm('移除订阅', '确定移除该订阅及其名下独占的源吗？', () => {

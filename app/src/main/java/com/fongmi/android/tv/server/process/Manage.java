@@ -277,7 +277,16 @@ public class Manage implements Process {
 
     private Response forward(IHTTPSession session, String url) throws IOException {
         if (!remoteForwardAllowed(url)) return null;
-        return forwardTo(session, url, url.startsWith("/manage/sources/test") ? SOURCE_TEST_TIMEOUT : 5000);
+        return forwardTo(session, url, isSlowSourceOp(url) ? SOURCE_TEST_TIMEOUT : 5000);
+    }
+
+    /**
+     * 这些源操作在服务端要先跑完一轮完整测速才能返回（本机与转发跳都要用长超时），
+     * 其余请求保持 5 秒快速失败。
+     */
+    private boolean isSlowSourceOp(String url) {
+        // 订阅 import/update/update-all 内部最多 15 秒下载 + 解析，同样不能用 5 秒转发跳。
+        return url.startsWith("/manage/sources/test") || url.startsWith("/manage/sources/subscription/") || url.equals("/manage/sources/block-invalid") || url.equals("/manage/sources/delete-invalid");
     }
 
     private boolean remoteForwardAllowed(String url) {
@@ -560,7 +569,9 @@ public class Manage implements Process {
 
     private boolean isCurrentConfig(Config config) {
         Config current = currentConfig(config.getType());
-        return current.getUrl().equals(config.getUrl());
+        // 全新安装且该类型从未加载过配置时 getUrl() 为 null，直接 equals 会 NPE 使列表/添加接口 500。
+        String currentUrl = current.getUrl();
+        return currentUrl != null && currentUrl.equals(config.getUrl());
     }
 
     private Config currentConfig(int type) {
@@ -1025,8 +1036,8 @@ public class Manage implements Process {
         JsonObject root = new JsonObject();
         root.add("sites", sites);
         Config config = SourceSetting.config(target);
-        String name = config.getName();
-        if (!TextUtils.isEmpty(name)) name = name.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
+        String name = TextUtils.isEmpty(config.getName()) ? "" : config.getName();
+        name = name.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
         if (name.length() > 40) name = name.substring(0, 40);
         String filename = (TextUtils.isEmpty(name) ? "sites" : name) + "-sites.json";
         JsonObject object = new JsonObject();
@@ -1071,7 +1082,7 @@ public class Manage implements Process {
         String target = params.getOrDefault("api", "").trim();
         JsonObject root = SourceSetting.configJson(target);
         JsonArray sites = SourceSetting.sites(target);
-        JsonArray tested = SourceSetting.test(sites, 4000);
+        JsonArray tested = SourceSetting.test(target, sites, 4000);
         List<String> keys = new ArrayList<>();
         for (JsonElement element : tested) {
             if (!element.isJsonObject()) continue;
@@ -1110,14 +1121,26 @@ public class Manage implements Process {
             }
             sites = filtered;
         }
-        JsonArray tested = SourceSetting.test(sites, 4000);
+        JsonArray tested = SourceSetting.test(target, sites, 4000);
         if (bool(params.get("auto"), false)) {
+            // 按注释承诺的 快→慢→失败→未测速 排序：可用源必须按 cost 升序，
+            // 此前只按原列表顺序把 ok 排前面，等于没有“按速度排序”。
+            List<JsonObject> ok = new ArrayList<>();
             List<String> keys = new ArrayList<>();
             for (JsonElement element : tested) {
                 if (!element.isJsonObject()) continue;
                 JsonObject item = element.getAsJsonObject();
-                if ("ok".equals(Json.safeString(item, "state"))) keys.add(Json.safeString(item, "key"));
+                if ("ok".equals(Json.safeString(item, "state"))) ok.add(item);
             }
+            ok.sort(java.util.Comparator.comparingLong(item -> {
+                String cost = Json.safeString(item, "cost");
+                try {
+                    return cost.isEmpty() ? Long.MAX_VALUE : Long.parseLong(cost);
+                } catch (NumberFormatException e) {
+                    return Long.MAX_VALUE;
+                }
+            }));
+            for (JsonObject item : ok) keys.add(Json.safeString(item, "key"));
             for (JsonElement element : tested) {
                 if (!element.isJsonObject()) continue;
                 JsonObject item = element.getAsJsonObject();
@@ -1191,12 +1214,27 @@ public class Manage implements Process {
      */
     private Response sourcesSubscriptionUpdateAll() throws Exception {
         JsonArray subscriptions = Setting.getManageSubscriptions();
+        JsonArray failed = new JsonArray();
         for (JsonElement element : subscriptions) {
             if (!element.isJsonObject()) continue;
-            String id = Json.safeString(element.getAsJsonObject(), "id");
-            sourcesSubscriptionUpdate(Map.of("id", id));
+            JsonObject item = element.getAsJsonObject();
+            String id = Json.safeString(item, "id");
+            try {
+                sourcesSubscriptionUpdate(Map.of("id", id));
+            } catch (Exception e) {
+                // 单条订阅失败不中断整批：此前一条 URL 失效就让「一键更新」整体报错，
+                // 其余订阅其实已更新成功并落盘，前端只能看到失败。失败项收集后单独回传。
+                JsonObject err = new JsonObject();
+                err.addProperty("id", id);
+                err.addProperty("name", Json.safeString(item, "name"));
+                err.addProperty("message", message(e));
+                failed.add(err);
+            }
         }
-        return sourcesSubscriptionList();
+        JsonObject object = new JsonObject();
+        object.add("items", Setting.getManageSubscriptions());
+        object.add("failed", failed);
+        return json(object);
     }
 
     /**
@@ -1228,13 +1266,27 @@ public class Manage implements Process {
     }
 
     private String downloadSubscription(String url) throws Exception {
-        try {
-            okhttp3.Response response = OkHttp.newCall(OkHttp.client(15000), url).execute();
+        // 5MB 限制必须在流式读取中执行：先 body.string() 全量缓冲再查大小，
+        // 超限响应会先把整条流吞进内存才报错，防 OOM 的目的完全落空。
+        // try-with-resources 同时覆盖失败分支——此前 !isSuccessful 直接 throw，Response 未关闭泄漏连接。
+        final long max = 5 * 1024 * 1024;
+        try (okhttp3.Response response = OkHttp.newCall(OkHttp.client(15000), url).execute()) {
             if (!response.isSuccessful()) throw new Exception("下载失败：HTTP " + response.code());
-            String body = response.body() == null ? "" : response.body().string();
-            if (body.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 5 * 1024 * 1024) throw new Exception("订阅内容超过 5MB 限制");
-            if (body.trim().isEmpty()) throw new Exception("订阅内容为空");
-            return body;
+            okhttp3.ResponseBody body = response.body();
+            if (body == null) throw new Exception("订阅内容为空");
+            okio.BufferedSource source = body.source();
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            long total = 0;
+            int read;
+            while ((read = source.read(buffer)) != -1) {
+                total += read;
+                if (total > max) throw new Exception("订阅内容超过 5MB 限制");
+                out.write(buffer, 0, read);
+            }
+            String text = out.toString("UTF-8");
+            if (text.trim().isEmpty()) throw new Exception("订阅内容为空");
+            return text;
         } catch (Exception e) {
             if (e.getMessage() != null && (e.getMessage().startsWith("下载失败") || e.getMessage().startsWith("订阅内容"))) throw e;
             throw new Exception("下载失败：" + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));

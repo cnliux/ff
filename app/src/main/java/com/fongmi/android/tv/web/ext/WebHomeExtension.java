@@ -236,7 +236,10 @@ public class WebHomeExtension {
     private static String readCached(String url, String prefix, String suffix) {
         if (TextUtils.isEmpty(url)) return "";
         if ("file".equals(UrlUtil.scheme(url))) return Path.read(Path.local(url.substring("file://".length())));
-        if ("local".equals(UrlUtil.scheme(url))) return Path.read(Path.files(url.substring("local://".length())));
+        if ("local".equals(UrlUtil.scheme(url))) {
+            File local = localFiles(url.substring("local://".length()));
+            return local == null ? "" : Path.read(local);
+        }
         File file = cache(prefix + Util.md5(url) + suffix);
         String cached = Path.read(file);
         try {
@@ -253,6 +256,23 @@ public class WebHomeExtension {
         return cached;
     }
 
+    /**
+     * local:// 读取的包含性校验：manifest 里的 local:// 路径可以携带 ../ 或直接写绝对路径，
+     * 旧写法直接 new File(files(), name)，把 filesDir 之外的私有文件（shared_prefs 等）
+     * 当成扩展脚本注入特权首页执行。与 Path.local 的 file:// 分支对齐——canonical 校验必须
+     * 落在 filesDir/subdir 之内，越界一律拒绝（返回 null → 空脚本）。
+     */
+    private static File localFiles(String name) {
+        try {
+            File dir = Path.files("webhome_ext");
+            File target = new File(dir, name).getCanonicalFile();
+            String base = dir.getCanonicalPath() + File.separator;
+            return target.getPath().startsWith(base) ? target : null;
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
     private static File cache(String name) {
         File dir = Path.cache("webhome_ext");
         if (!dir.exists()) dir.mkdirs();
@@ -262,6 +282,12 @@ public class WebHomeExtension {
     private static boolean matchesAny(List<String> patterns, String value) {
         for (String pattern : patterns) {
             try {
+                // manifest 的 cspKeyRegex/excludeCspKeyRegex 来自远端：过长的正则允许构造
+                // 灾难性回溯（如 (a+)+$），在扩展加载线程上单次匹配即可挂死；拒绝超长模式。
+                if (pattern == null || pattern.length() > 200) {
+                    SpiderDebug.log("webhome-ext", "regex rejected (length)");
+                    continue;
+                }
                 if (Pattern.compile(pattern).matcher(value).find()) return true;
             } catch (Throwable e) {
                 SpiderDebug.log("webhome-ext", "invalid regex=%s error=%s", pattern, e.getMessage());
