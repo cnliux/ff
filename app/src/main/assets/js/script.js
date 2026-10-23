@@ -10,12 +10,8 @@ let warnToastTimer = null;
 let danmakuMode = 1;
 let danmakuSize = 25;
 let dialogClosing = false;
-const authToken = new URLSearchParams(location.search).get('token') || '';
-function authParams(extra = {}) { return authToken ? { ...extra, token: authToken } : extra; }
-function authUrl(url) {
-    if (!authToken || String(url || '').includes('token=')) return url;
-    return url + (String(url).includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(authToken);
-}
+function authParams(extra = {}) { return { ...extra }; }
+function authUrl(url) { return url; }
 
 function search() {
     doAction('search', { word: $('#keyword').val() });
@@ -214,7 +210,6 @@ function confirmUpload(yes) {
     if (files.length === 0) return;
     const formData = new FormData();
     formData.append('path', currentRoot);
-    if (authToken) formData.append('token', authToken);
     Array.from(files).forEach((f, i) => formData.append('files-' + i, f));
     $('#loadingToast').show();
     $.ajax({

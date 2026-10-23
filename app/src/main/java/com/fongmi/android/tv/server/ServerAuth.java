@@ -4,27 +4,16 @@ import android.text.TextUtils;
 
 import com.github.catvod.utils.Prefers;
 
-import java.security.MessageDigest;
 import java.security.SecureRandom;
 
 import fi.iki.elonen.NanoHTTPD;
 
 public class ServerAuth {
 
-    private static final String HEADER = "x-fongmi-token";
-    private static final String BEARER = "Bearer ";
     private static volatile String TOKEN = token();
 
     public static String tokenValue() {
         return TOKEN;
-    }
-
-    public static String tokenPreview() {
-        return TOKEN.substring(0, Math.min(4, TOKEN.length())) + "****";
-    }
-
-    public static void resetToken() {
-        TOKEN = token();
     }
 
     public static String ipMode() {
@@ -33,13 +22,6 @@ public class ServerAuth {
 
     public static void setIpMode(String mode) {
         Prefers.put("server_ip_allow", TextUtils.isEmpty(mode) ? "all" : mode);
-    }
-
-    // Note: token in query string may leak via Referer headers and logs.
-    // Prefer Authorization: Bearer header for API calls where possible.
-    // This method exists because QR-code / link-based access requires URL-embedded auth.
-    public static String withToken(String url) {
-        return url + (url.contains("?") ? "&" : "?") + "token=" + TOKEN;
     }
 
     public static boolean isLocal(NanoHTTPD.IHTTPSession session) {
@@ -63,11 +45,8 @@ public class ServerAuth {
     }
 
     public static boolean allow(NanoHTTPD.IHTTPSession session, String url) {
-        if (!allowIp(session)) return false;
-        if (!protectedPath(url)) return true;
-        if (isSensitivePath(url)) return hasToken(session);
-        if (isLocal(session) && isLoopbackHost(session)) return true;
-        return hasToken(session);
+        // 本地服务不再使用 token 鉴权，仅保留用户配置的 IP 访问范围限制。
+        return allowIp(session);
     }
 
     private static boolean allowIp(NanoHTTPD.IHTTPSession session) {
@@ -76,49 +55,6 @@ public class ServerAuth {
         String ip = remoteIp(session);
         if (isLocalIp(ip)) return true;
         return "lan".equals(mode) && isLanIp(ip);
-    }
-
-    private static boolean hasToken(NanoHTTPD.IHTTPSession session) {
-        return equalsToken(TOKEN, session.getParms().get("token")) || equalsToken(TOKEN, session.getHeaders().get(HEADER)) || bearer(session);
-    }
-
-    // Constant-time comparison so response timing cannot be used to recover the token byte by byte.
-    private static boolean equalsToken(String expected, String provided) {
-        if (expected == null || provided == null) return false;
-        return MessageDigest.isEqual(expected.getBytes(), provided.getBytes());
-    }
-
-    private static boolean protectedPath(String url) {
-        // /manage/ 不再要求 token：手机浏览器直接输入 IP 地址 URL 即可进入管理页（用户要求）
-        return url.startsWith("/file") || url.startsWith("/upload") || url.startsWith("/newFolder") || url.startsWith("/delFolder") || url.startsWith("/delFile") || url.startsWith("/debug/") || url.startsWith("/cache") || url.startsWith("/action") || url.startsWith("/proxy") || url.startsWith("/webResource") || url.startsWith("/pan/check") || url.startsWith("/parse") || url.startsWith("/media") || url.startsWith("/tvbus") || url.startsWith("/device") || url.startsWith("/api/playback") || url.startsWith("/playback") || url.startsWith("/m3u8") || url.startsWith("/image/");
-    }
-
-    /**
-     * State-changing or sensitive paths that must carry the server token even from loopback,
-     * so a same-device malicious app/page cannot silently mutate state without the token.
-     * /manage/ 已按用户要求放开：管理页及其接口不再强制 token。
-     */
-    private static boolean isSensitivePath(String url) {
-        return url.startsWith("/file") || url.startsWith("/upload") || url.startsWith("/newFolder") || url.startsWith("/delFolder") || url.startsWith("/delFile") || url.startsWith("/debug/") || url.startsWith("/cache") || url.startsWith("/action") || url.startsWith("/pan/check") || url.startsWith("/api/playback") || url.startsWith("/playback");
-    }
-
-    /**
-     * Guards against DNS-rebinding: a loopback request is only trusted when its Host header
-     * explicitly names the loopback interface, never an attacker-controlled hostname.
-     */
-    private static boolean isLoopbackHost(NanoHTTPD.IHTTPSession session) {
-        String host = session.getHeaders().get("host");
-        if (TextUtils.isEmpty(host)) return false;
-        String name = host.trim();
-        int colon = name.lastIndexOf(':');
-        if (colon > 0) name = name.substring(0, colon);
-        if (name.startsWith("[") && name.endsWith("]")) name = name.substring(1, name.length() - 1);
-        return isLocalIp(name);
-    }
-
-    private static boolean bearer(NanoHTTPD.IHTTPSession session) {
-        String auth = session.getHeaders().get("authorization");
-        return auth != null && auth.startsWith(BEARER) && TOKEN.equals(auth.substring(BEARER.length()));
     }
 
     private static String remoteIp(NanoHTTPD.IHTTPSession session) {

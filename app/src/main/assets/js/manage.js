@@ -80,16 +80,8 @@ const LOGIN_PREVIEW_ROW_CHARS = 1200;
 function escPath(s) { return String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
 function escHtml(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 function itemId(path) { return String(path || '').replace(/[^a-zA-Z0-9_-]/g, '_'); }
-const authToken = new URLSearchParams(location.search).get('token') || '';
-function authParams(extra = {}) {
-    const params = { ...extra };
-    if (authToken) params.token = authToken;
-    return params;
-}
-function authUrl(url) {
-    if (!authToken || String(url || '').includes('token=')) return url;
-    return url + (String(url).includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(authToken);
-}
+function authParams(extra = {}) { return { ...extra }; }
+function authUrl(url) { return url; }
 function remoteManageActive() { return mode === 'remote' && currentView !== 'sync' && !!target; }
 function targetParam() { return authParams(remoteManageActive() ? { target } : {}); }
 function targetQuery(extra = {}) { return new URLSearchParams(authParams({ ...targetParam(), ...extra })).toString(); }
@@ -420,22 +412,20 @@ function loadDevices(scan = false) {
 function pairManualDevice() {
     stopRemoteMediaPolling();
     const manualTarget = String($('#manualDeviceTarget').val() || '').trim().replace(/\/+$/, '');
-    const token = String($('#manualDeviceToken').val() || '').trim();
-    if (!manualTarget || !token) { warnToast('请输入地址和 Token'); return; }
+    if (!manualTarget) { warnToast('请输入设备地址'); return; }
     showLoading();
-    $.ajax({ url: authUrl('/manage/remote/pair'), type: 'post', data: authParams({ target: manualTarget, remoteToken: token }), timeout: 5000, cache: false })
+    $.ajax({ url: authUrl('/manage/remote/pair'), type: 'post', data: authParams({ target: manualTarget }), timeout: 5000, cache: false })
         .done(res => {
             const device = parseJson(res) || {};
             target = manualTarget;
             targetName = device.name || manualTarget;
-            $('#manualDeviceToken').val('');
             devicePanelOpen = false;
             updateTargetText();
             updateRemotePicker();
             resetViewState();
             loadDevices();
             startRemoteHealth();
-            warnToast('配对成功，Token 已保存');
+            warnToast('设备已保存');
         })
         .fail((xhr, status) => warnToast(requestError(xhr, status, '配对失败')))
         .always(hideLoading);
@@ -727,7 +717,6 @@ function confirmUpload(yes) {
     const remote = mode === 'remote' && !!target;
     if (blockOfflineRemote(remote ? '/manage/remote/upload' : '/upload', remote ? { target } : {})) return;
     if (remote) formData.append('target', target);
-    if (authToken) formData.append('token', authToken);
     Array.from(files).forEach((file, index) => formData.append('files-' + index, file));
     showLoading();
     $.ajax({ url: authUrl(remote ? '/manage/remote/upload' : '/upload'), type: 'post', data: formData, processData: false, contentType: false, timeout: UPLOAD_TIMEOUT })
@@ -2003,7 +1992,6 @@ function onConfigLocalFileSelected() {
     const data = new FormData();
     data.append('path', CONFIG_UPLOAD_DIR);
     if (remote) data.append('target', target);
-    if (authToken) data.append('token', authToken);
     data.append('files-0', file);
     const url = authUrl(remote ? '/manage/remote/upload' : '/upload');
     if (blockOfflineRemote(url, remote ? { target } : {})) return;
