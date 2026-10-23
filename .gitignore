@@ -30,6 +30,15 @@ third_party/sources/
 # 本地调试产物（截图 / UI dump / logcat / 本地安装包暂存），统一收纳在 debug/
 /debug/
 
+# 本地修复任务日志，不进公开仓库
+FIX_TASKS.md
+
+# Agent 工作目录（曾误随 429f13f 入库）
+/.box-agent-scratch/
+
+# 根目录误存的截图（image<uuid>.png）
+/image*.png
+
 # 工作区记忆
 /.workbuddy/
 
