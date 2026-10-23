@@ -400,6 +400,7 @@ function resetViewState() {
     proxyLoadedKey = '';
     configsLoadedKey = '';
     sourcesLoadedKey = '';
+    sourceTarget = '';
     sourceTestResults = {};
     currentFiles = [];
     clearFileSelection();
@@ -2053,12 +2054,12 @@ function loadSourcesManage(force = false) {
         applySourcesData(data);
     }, '源列表加载失败');
 }
-// 源管理支持多接口：所有源接口调用注入 target（接口地址），为空时是当前启用接口
+// 源管理支持多接口：所有源接口调用注入 api（接口地址），为空时是当前启用接口；target 仅用于远端设备转发
 function getSource(path, ok, fail) {
-    return getJson(path + (path.includes('?') ? '&' : '?') + 'target=' + encodeURIComponent(sourceTarget || ''), ok, fail);
+    return getJson(path + (path.includes('?') ? '&' : '?') + 'api=' + encodeURIComponent(sourceTarget || ''), ok, fail);
 }
 function postSource(path, params, ok, fail) {
-    return postJson(path, { target: sourceTarget || '', ...(params || {}) }, ok, fail);
+    return postJson(path, { ...(remoteManageActive() ? { target } : {}), api: sourceTarget || '', ...(params || {}) }, ok, fail);
 }
 function renderSourceTargets(configs) {
     const items = Array.isArray(configs) ? configs : [];
