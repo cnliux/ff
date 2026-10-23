@@ -32,6 +32,7 @@ jobs:
           python3 scripts/check_i18n.py
           bash -n scripts/pull_apk.sh
           bash -n scripts/bump_version.sh
+          bash -n scripts/gradle_retry.sh
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
@@ -62,6 +63,32 @@ jobs:
           python3.10 --version
           python3.10 -m venv --help >/dev/null
 
+      # chaquo.com intermittently drops connections and then returns "from
+      # versions: none" for every native package, which looks like a dependency
+      # bug but is really an index outage.
+      - name: Wait for Chaquopy package index
+        run: |
+          URL="https://chaquo.com/pypi-13.1/lxml/"
+          DEADLINE=$((SECONDS + 900))
+          until curl -fsS --max-time 20 "$URL" | grep -q "lxml-"; do
+            if [ "$SECONDS" -ge "$DEADLINE" ]; then
+              echo "::error::chaquo.com has been unreachable for 15 minutes; Chaquopy cannot install lxml"
+              exit 1
+            fi
+            echo "chaquo.com is unreachable; retrying in 30s"
+            sleep 30
+          done
+
+      - name: Restore Chaquopy pip cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/chaquopy
+            ~/.cache/pip
+          key: chaquopy-${{ runner.os }}-py3.10-${{ hashFiles('chaquo/requirements.txt') }}
+          restore-keys: |
+            chaquopy-${{ runner.os }}-py3.10-
+
       - name: Make gradlew executable
         run: chmod +x gradlew
 
@@ -89,9 +116,8 @@ jobs:
       # workflow's job and takes far longer.
       - name: Assemble debug APKs
         run: |
-          ./gradlew --no-daemon \
-            :app:assembleMobileFullArm64_v8aDebug \
-            :app:assembleLeanbackFullArm64_v8aDebug
+          bash scripts/gradle_retry.sh :app:assembleMobileFullArm64_v8aDebug --no-daemon
+          bash scripts/gradle_retry.sh :app:assembleLeanbackFullArm64_v8aDebug --no-daemon
 
       # Artifact names may not contain '/', and the branch name does. GitHub
       # expressions have no replace() function, so sanitize it in the shell.

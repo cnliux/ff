@@ -102,7 +102,7 @@ jobs:
     name: Build APKs
     needs: preflight
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
@@ -175,35 +175,64 @@ jobs:
           python3.10 --version
           python3.10 -m venv --help >/dev/null
 
+      # chaquo.com intermittently drops connections and then returns "from
+      # versions: none" for every native package, which looks like a dependency
+      # bug but is really an index outage. Wait for it to come back instead of
+      # failing on the first Gradle invocation.
+      - name: Wait for Chaquopy package index
+        run: |
+          URL="https://chaquo.com/pypi-13.1/lxml/"
+          DEADLINE=$((SECONDS + 900))
+          until curl -fsS --max-time 20 "$URL" | grep -q "lxml-"; do
+            if [ "$SECONDS" -ge "$DEADLINE" ]; then
+              echo "::error::chaquo.com has been unreachable for 15 minutes; Chaquopy cannot install lxml"
+              exit 1
+            fi
+            echo "chaquo.com is unreachable; retrying in 30s"
+            sleep 30
+          done
+
+      # Keep downloaded and built Android wheels between runs. The cache is
+      # reusable across versions because the key is tied to requirements.txt.
+      - name: Restore Chaquopy pip cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/chaquopy
+            ~/.cache/pip
+          key: chaquopy-${{ runner.os }}-py3.10-${{ hashFiles('chaquo/requirements.txt') }}
+          restore-keys: |
+            chaquopy-${{ runner.os }}-py3.10-
+
       - name: Build mobile-universal
-        run: ./gradlew :app:assembleMobileFullUniversal${{ inputs.build_type || 'Release' }}
+        run: bash scripts/gradle_retry.sh :app:assembleMobileFullUniversal${{ inputs.build_type || 'Release' }}
 
       - name: Build mobile-arm64
-        run: ./gradlew :app:assembleMobileFullArm64_v8a${{ inputs.build_type || 'Release' }}
+        run: bash scripts/gradle_retry.sh :app:assembleMobileFullArm64_v8a${{ inputs.build_type || 'Release' }}
 
       - name: Build mobile-armv7
-        run: ./gradlew :app:assembleMobileFullArmeabi_v7a${{ inputs.build_type || 'Release' }}
+        run: bash scripts/gradle_retry.sh :app:assembleMobileFullArmeabi_v7a${{ inputs.build_type || 'Release' }}
 
       - name: Build leanback-universal
-        run: ./gradlew :app:assembleLeanbackFullUniversal${{ inputs.build_type || 'Release' }}
+        run: bash scripts/gradle_retry.sh :app:assembleLeanbackFullUniversal${{ inputs.build_type || 'Release' }}
 
       - name: Build leanback-arm64
-        run: ./gradlew :app:assembleLeanbackFullArm64_v8a${{ inputs.build_type || 'Release' }}
+        run: bash scripts/gradle_retry.sh :app:assembleLeanbackFullArm64_v8a${{ inputs.build_type || 'Release' }}
 
       - name: Build leanback-armv7
-        run: ./gradlew :app:assembleLeanbackFullArmeabi_v7a${{ inputs.build_type || 'Release' }}
+        run: bash scripts/gradle_retry.sh :app:assembleLeanbackFullArmeabi_v7a${{ inputs.build_type || 'Release' }}
 
       - name: Build mobile-lite-arm64
-        run: ./gradlew :app:assembleMobileLiteArm64_v8a${{ inputs.build_type || 'Release' }}
+        run: bash scripts/gradle_retry.sh :app:assembleMobileLiteArm64_v8a${{ inputs.build_type || 'Release' }}
 
       - name: Build mobile-lite-universal
-        run: ./gradlew :app:assembleMobileLiteUniversal${{ inputs.build_type || 'Release' }}
+        run: bash scripts/gradle_retry.sh :app:assembleMobileLiteUniversal${{ inputs.build_type || 'Release' }}
 
       - name: Build leanback-lite-universal
-        run: ./gradlew :app:assembleLeanbackLiteUniversal${{ inputs.build_type || 'Release' }}
+        run: bash scripts/gradle_retry.sh :app:assembleLeanbackLiteUniversal${{ inputs.build_type || 'Release' }}
 
       - name: Build leanback-lite-arm64
-        run: ./gradlew :app:assembleLeanbackLiteArm64_v8a${{ inputs.build_type || 'Release' }}
+        run: bash scripts/gradle_retry.sh :app:assembleLeanbackLiteArm64_v8a${{ inputs.build_type || 'Release' }}
 
       - name: Collect APKs
         id: collect
