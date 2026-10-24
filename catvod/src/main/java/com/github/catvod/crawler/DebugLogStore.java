@@ -23,6 +23,7 @@ public class DebugLogStore {
     private static final ArrayDeque<String> LINES = new ArrayDeque<>();
     private static final ThreadLocal<SimpleDateFormat> FORMAT = ThreadLocal.withInitial(() -> new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US));
     private static final String FILE_NAME = "webhtv-debug-log.txt";
+    private static final String FILE_NAME_SPIDER = "webhtv-debug-spider-log.txt";
     private static final String PREF_ENABLED = "debug_log";
     private static final int MAX_LINES = 2000;
     private static final int MAX_FILE_BYTES = 1024 * 1024;
@@ -75,6 +76,19 @@ public class DebugLogStore {
         return builder.toString();
     }
 
+    /**
+     * 读取 :spider 子进程日志文件（同一 cacheDir，跨进程共享），供主进程 /debug 页面合并展示。
+     */
+    public static String spiderText() {
+        try {
+            File file = new File(Init.context().getCacheDir(), FILE_NAME_SPIDER);
+            if (!file.exists()) return "";
+            return readTail(file);
+        } catch (Throwable e) {
+            return "";
+        }
+    }
+
     public static List<String> snapshot() {
         synchronized (LOCK) {
             return new ArrayList<>(LINES);
@@ -120,9 +134,23 @@ public class DebugLogStore {
 
     private static File file() {
         try {
-            return new File(Init.context().getCacheDir(), FILE_NAME);
+            return new File(Init.context().getCacheDir(), isSpiderProcess() ? FILE_NAME_SPIDER : FILE_NAME);
         } catch (Throwable e) {
             return null;
+        }
+    }
+
+    /**
+     * 爬虫隔离子进程（:spider）写独立日志文件，避免与主进程同文件互相覆盖环形缓冲。
+     * catvod 不依赖 app 模块，直接读 /proc/self/cmdline 判定。
+     */
+    private static boolean isSpiderProcess() {
+        try (FileInputStream in = new FileInputStream("/proc/self/cmdline")) {
+            byte[] buf = new byte[256];
+            int n = in.read(buf);
+            return n > 0 && new String(buf, 0, n, StandardCharsets.UTF_8).trim().endsWith(":spider");
+        } catch (Throwable e) {
+            return false;
         }
     }
 

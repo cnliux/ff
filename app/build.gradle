@@ -38,8 +38,8 @@ android {
         applicationId "com.fongmi.android.tv"
         minSdk libs.versions.minSdk.get().toInteger()
         targetSdk libs.versions.targetSdk.get().toInteger()
-        versionCode 724
-        versionName "5.17.6"
+        versionCode 725
+        versionName "5.17.7"
         buildConfigField "String", "MEDIA3_VERSION", "\"${libs.versions.media3.get()}\""
         buildConfigField "String", "GIT_REVISION", "\"${gitRevision}\""
         buildConfigField "String", "GIT_STATE", "\"${gitDirty}\""
@@ -85,6 +85,16 @@ android {
             dimension "abi"
             ndk { abiFilters "armeabi-v7a" }
         }
+        //x86_64：仅用于 x86_64 模拟器原生调试（绕开 houdini 转译层），不发布。
+        //第三方 arm-only 库(ijkplayer/thunder/jianpian 等)在此包内缺失，播放相关功能不可用，
+        //但爬虫源 dex 执行路径不依赖 native 库，可用于验证 ART 原生校验与崩溃兜底。
+        x86_64 {
+            dimension "abi"
+            ndk { abiFilters "x86_64" }
+            //chaquo 等库模块只有 universal/arm64/v7a 三个 abi 变体：x86_64 变体回退消费 universal
+            //（arm-only 的 Python 运行时在 x86_64 上本就无法加载，回退仅满足 Gradle 变体匹配）。
+            matchingFallbacks = ['universal']
+        }
     }
 
     lint {
@@ -95,6 +105,7 @@ android {
     buildFeatures {
         buildConfig = true
         viewBinding = true
+        aidl = true
     }
 
     signingConfigs {

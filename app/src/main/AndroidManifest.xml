@@ -151,6 +151,11 @@
             android:foregroundServiceType="dataSync|connectedDevice"
             android:stopWithTask="false" />
 
+        <service
+            android:name=".spider.SpiderService"
+            android:exported="false"
+            android:process=":spider" />
+
         <meta-data
             android:name="com.google.android.gms.car.application"
             android:resource="@xml/automotive_app_desc" />

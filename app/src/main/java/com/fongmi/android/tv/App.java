@@ -23,6 +23,7 @@ import com.fongmi.android.tv.utils.LocalNetworkPermission;
 import com.fongmi.android.tv.utils.NsdDeviceDiscovery;
 import com.fongmi.android.tv.utils.Notify;
 import com.fongmi.android.tv.utils.PreviousProcessExitLogger;
+import com.fongmi.android.tv.utils.ProcessUtil;
 import com.fongmi.android.tv.utils.EpgReminder;
 import com.fongmi.hook.Hook;
 import com.github.catvod.crawler.DebugLogStore;
@@ -97,6 +98,10 @@ public class App extends Application implements Application.ActivityLifecycleCal
     @Override
     public void onCreate() {
         super.onCreate();
+        if (!ProcessUtil.isMainProcess()) {
+            initSpiderProcess();
+            return;
+        }
         installSpiderCrashGuard();
         Prefers.remove("theme_color");
         Prefers.remove("wall_color");
@@ -112,6 +117,15 @@ public class App extends Application implements Application.ActivityLifecycleCal
         ProxySetting.apply();
         registerActivityLifecycleCallbacks(this);
         post(this::startBackgroundServices, 1200);
+    }
+
+    /**
+     * :spider 子进程最小初始化：只开日志与代理/DNS 规则（jar 内 OkHttp 需要）。
+     * 故意不装崩溃守卫——子进程未捕获异常/被 System.exit 杀死正是主进程 binderDied 的检测手段。
+     */
+    private void initSpiderProcess() {
+        DebugLogStore.restoreEnabled();
+        ProxySetting.apply();
     }
 
     /**

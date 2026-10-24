@@ -42,6 +42,9 @@ FIX_TASKS.md
 # 工作区记忆
 /.workbuddy/
 
+# Agent 会话文档（方案/计划）：本地保留，不进仓库
+/.trae/
+
 # 内部文档（开发文档 / 审计报告 / 扩展指南）：不进公开仓库，
 # 本地保留，另有 CNB 私有仓的 docs 分支托管
 /docs-private/

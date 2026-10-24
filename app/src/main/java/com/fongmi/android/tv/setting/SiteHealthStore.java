@@ -71,6 +71,17 @@ public class SiteHealthStore {
         }
     }
 
+    public static void recordProcessDeath(String key, String error) {
+        if (skip(key)) return;
+        synchronized (SiteHealthStore.class) {
+            Health health = get(key);
+            health.updatedAt = System.currentTimeMillis();
+            health.processDeaths++;
+            health.lastDeathError = trim(error);
+            markDirty();
+        }
+    }
+
     public static void recordPlay(String key, boolean success, String error) {
         if (skip(key)) return;
         synchronized (SiteHealthStore.class) {
@@ -221,6 +232,7 @@ public class SiteHealthStore {
         private int detailFail;
         private int playSuccess;
         private int playFail;
+        private int processDeaths;
         private int lastSearchCount;
         private long lastSearchCost;
         private long lastDetailCost;
@@ -234,16 +246,18 @@ public class SiteHealthStore {
         private String lastSearchError;
         private String lastDetailError;
         private String lastPlayError;
+        private String lastDeathError;
 
         private int total() {
-            return searchSuccess + searchFail + detailSuccess + detailFail + playSuccess + playFail;
+            return searchSuccess + searchFail + detailSuccess + detailFail + playSuccess + playFail + processDeaths;
         }
 
         private double score() {
             int success = searchSuccess + detailSuccess * 2 + playSuccess * 5;
             int fail = searchFail + detailFail * 2 + playFail * 5;
-            if (success + fail == 0) return 0;
+            if (success + fail == 0 && processDeaths == 0) return 0;
             double score = 60.0 * (success - fail) / (success + fail + 4.0);
+            if (processDeaths > 0) score -= Math.min(processDeaths, 5) * 12;
             score += Math.min(lastSearchCount, 20) * 1.2;
             score -= Math.min(lastSearchCost, TimeUnit.SECONDS.toMillis(8)) / 1000.0;
             score -= Math.min(lastDetailCost, TimeUnit.SECONDS.toMillis(8)) / 1500.0;

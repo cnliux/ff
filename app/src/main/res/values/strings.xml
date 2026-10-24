@@ -251,6 +251,9 @@ WebHomeTV is a player shell. It does not include content sources. Please use law
     <string name="setting_csp_warmup_select_site">Select CSP sites</string>
     <string name="setting_csp_warmup_no_site">No jar CSP site available</string>
     <string name="setting_csp_warmup_select_required">Select at least one CSP site</string>
+    <string name="setting_spider_isolation">Spider process isolation</string>
+    <string name="setting_spider_isolation_reapply">Takes effect after config reload</string>
+    <string name="setting_spider_quarantine_cleared">Spider quarantine cleared</string>
     <string name="setting_playback_artwork_wall">Playback stills</string>
     <string name="setting_drive_check">Drive link check</string>
     <string name="setting_family_filter">Family filter</string>

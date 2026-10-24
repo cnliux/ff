@@ -46,8 +46,15 @@ public class DebugLogs implements Process {
         return noCache(response, null);
     }
 
-    private Response download() {
+    private String merged() {
         String text = DebugLogStore.text();
+        String spider = DebugLogStore.spiderText();
+        if (TextUtils.isEmpty(spider)) return text;
+        return text + "\n===== :spider =====\n" + spider;
+    }
+
+    private Response download() {
+        String text = merged();
         byte[] data = text.getBytes(StandardCharsets.UTF_8);
         Response response = NanoHTTPD.newFixedLengthResponse(Response.Status.OK, "text/plain; charset=utf-8", new ByteArrayInputStream(data), data.length);
         response.addHeader("Content-Disposition", "attachment; filename=webhtv-debug-log.txt");
@@ -58,7 +65,7 @@ public class DebugLogs implements Process {
     private Response stream(IHTTPSession session) {
         long version = DebugLogStore.version();
         boolean unchanged = version == paramLong(session, "v", -1);
-        String text = unchanged ? null : DebugLogStore.text();
+        String text = unchanged ? null : merged();
         Response response = NanoHTTPD.newFixedLengthResponse(Response.Status.OK, "application/json; charset=utf-8", "{\"enabled\":" + DebugLogStore.isEnabled() + ",\"size\":" + DebugLogStore.size() + ",\"bytes\":" + DebugLogStore.bytes() + ",\"version\":" + version + ",\"text\":" + (unchanged ? "null" : "\"" + json(text) + "\"") + "}");
         return noCache(response, null);
     }
@@ -79,7 +86,7 @@ public class DebugLogs implements Process {
     }
 
     private String html() {
-        String logs = escape(DebugLogStore.text());
+        String logs = escape(merged());
         String localUrl = Server.get().getAddress("/debug/logs");
         String lanUrl = Server.get().getAddress(false) + "/debug/logs";
         boolean enabled = DebugLogStore.isEnabled();

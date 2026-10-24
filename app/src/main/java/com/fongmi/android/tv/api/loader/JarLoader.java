@@ -3,6 +3,11 @@ package com.fongmi.android.tv.api.loader;
 import android.content.Context;
 
 import com.fongmi.android.tv.App;
+import com.fongmi.android.tv.api.config.VodConfig;
+import com.fongmi.android.tv.bean.Site;
+import com.fongmi.android.tv.setting.Setting;
+import com.fongmi.android.tv.setting.SiteHealthStore;
+import com.fongmi.android.tv.spider.SpiderProcessManager;
 import com.fongmi.android.tv.utils.DependencyTrust;
 import com.fongmi.android.tv.utils.Download;
 import com.fongmi.android.tv.utils.UrlUtil;
@@ -32,6 +37,7 @@ public class JarLoader {
     private final ConcurrentHashMap<String, Method> methods;
     private final ConcurrentHashMap<String, Spider> spiders;
     private final ConcurrentHashMap<String, Object> locks;
+    private final ConcurrentHashMap<String, File> remote;
     private volatile String recent;
 
     public JarLoader() {
@@ -39,25 +45,59 @@ public class JarLoader {
         methods = new ConcurrentHashMap<>();
         spiders = new ConcurrentHashMap<>();
         locks = new ConcurrentHashMap<>();
+        remote = new ConcurrentHashMap<>();
+        SpiderProcessManager.get().addDeathListener(() -> {
+            // 子进程死亡：RemoteSpider 门面全部作废，惰性重建（spider 实例在子进程侧已丢失）
+            spiders.entrySet().removeIf(entry -> entry.getValue() instanceof RemoteSpider);
+            String jarKey = SpiderProcessManager.get().getLastDeathJarKey();
+            if (jarKey == null || jarKey.isEmpty()) return;
+            try {
+                for (Site site : VodConfig.get().getSites()) {
+                    String api = site.getApi();
+                    if (api == null || !api.contains("csp_")) continue;
+                    if (Util.md5(site.getJar()).equals(jarKey)) SiteHealthStore.recordProcessDeath(site.getKey(), "spider process died");
+                }
+            } catch (Throwable ignored) {
+            }
+        });
     }
 
     public void clear() {
+        boolean isolation = Setting.isSpiderIsolation();
         spiders.values().forEach(Spider::destroy);
         loaders.clear();
         methods.clear();
         spiders.clear();
         locks.clear();
+        remote.clear();
         recent = null;
+        if (isolation) SpiderProcessManager.get().shutdownAll();
         File optRoot = new File(App.get().getCodeCacheDir(), "dexopt");
         if (optRoot.exists()) for (File child : optRoot.listFiles() == null ? new File[0] : optRoot.listFiles()) Path.clear(child);
     }
 
     public void setRecent(String recent) {
         this.recent = recent;
+        if (Setting.isSpiderIsolation()) SpiderProcessManager.get().setRecent(recent);
     }
 
     private void load(String key, File file) {
         if (Thread.interrupted()) return;
+        if (Setting.isSpiderIsolation()) {
+            // 隔离模式：DexClassLoader/Init.init 全部在 :spider 子进程执行，
+            // jar 若 System.exit 只杀子进程；失败（含子进程死亡）记日志跳过，不中断配置加载。
+            if (Setting.isSpiderQuarantined(key)) {
+                SpiderDebug.log("jar", "isolated load skipped (quarantined) key=%s", key);
+                return;
+            }
+            try {
+                SpiderProcessManager.get().loadJar(key, file);
+                remote.put(key, file);
+            } catch (Throwable e) {
+                SpiderDebug.log("jar", "isolated load failed key=%s err=%s", key, e.getMessage());
+            }
+            return;
+        }
         if (!Path.exists(file) || !file.setReadOnly()) return;
         File optDir = new File(App.get().getCodeCacheDir(), "dexopt" + File.separator + key);
         if (!optDir.exists()) optDir.mkdirs();
@@ -68,7 +108,7 @@ public class JarLoader {
         loaders.put(key, loader);
     }
 
-    static boolean containsProtobuf(File file) {
+    public static boolean containsProtobuf(File file) {
         if (file == null || !file.isFile()) return false;
         try (ZipFile zip = new ZipFile(file)) {
             for (java.util.Enumeration<? extends ZipEntry> entries = zip.entries(); entries.hasMoreElements(); ) {
@@ -179,7 +219,7 @@ public class JarLoader {
      * jar 是否已加载（只查缓存，不触发下载/信任确认）。供源测速等内容探测使用。
      */
     public boolean isLoaded(String jar) {
-        return jar != null && !jar.isEmpty() && loaders.containsKey(Util.md5(jar));
+        return jar != null && !jar.isEmpty() && (loaders.containsKey(Util.md5(jar)) || remote.containsKey(Util.md5(jar)));
     }
 
     public DexClassLoader dex(String jar) {
@@ -218,6 +258,17 @@ public class JarLoader {
     private Spider createSpider(String key, String api, String ext, String jar, String jaKey) {
         try {
             parseJar(jaKey, jar);
+            if (Setting.isSpiderIsolation()) {
+                // 隔离模式：实例化与 spider.init 在子进程执行，主进程只持有 RemoteSpider 门面。
+                if (Setting.isSpiderQuarantined(jaKey)) {
+                    SpiderDebug.log("jar", "createSpider quarantined key=%s", jaKey);
+                    return new SpiderNull();
+                }
+                if (!remote.containsKey(jaKey)) return new SpiderNull();
+                String spKey = jaKey + key;
+                SpiderProcessManager.get().createSpider(spKey, key, api, ext, jaKey);
+                return new RemoteSpider(spKey, jaKey, key);
+            }
             DexClassLoader loader = loaders.get(jaKey);
             if (loader == null) return new SpiderNull();
             Spider spider = (Spider) loader.loadClass("com.github.catvod.spider." + api.split("csp_")[1]).newInstance();
@@ -237,22 +288,57 @@ public class JarLoader {
     }
 
     public JSONObject jsonExt(String key, LinkedHashMap<String, String> jxs, String url) throws Throwable {
+        if (Setting.isSpiderIsolation()) return new JSONObject(SpiderProcessManager.get().jsonExt(key, toJson(jxs), url));
         Class<?> clz = requireRecentLoader().loadClass("com.github.catvod.parser.Json" + key);
         Method method = clz.getMethod("parse", LinkedHashMap.class, String.class);
         return (JSONObject) method.invoke(null, jxs, url);
     }
 
     public JSONObject jsonExtMix(String flag, String key, String name, LinkedHashMap<String, HashMap<String, String>> jxs, String url) throws Throwable {
+        if (Setting.isSpiderIsolation()) return new JSONObject(SpiderProcessManager.get().jsonExtMix(flag, key, name, toNestedJson(jxs), url));
         Class<?> clz = requireRecentLoader().loadClass("com.github.catvod.parser.Mix" + key);
         Method method = clz.getMethod("parse", LinkedHashMap.class, String.class, String.class, String.class);
         return (JSONObject) method.invoke(null, jxs, name, flag, url);
     }
 
     public Object[] proxy(Map<String, String> params) throws Exception {
+        if (Setting.isSpiderIsolation()) {
+            // recent 优先 + tryOthers 语义在子进程 SpiderHost 内实现
+            okhttp3.Response response = SpiderProcessManager.get().proxyStream(recent, params);
+            try {
+                okhttp3.ResponseBody body = response.body();
+                Map<String, String> headers = new HashMap<>();
+                for (String headerName : response.headers().names()) {
+                    if ("Transfer-Encoding".equalsIgnoreCase(headerName) || "Content-Length".equalsIgnoreCase(headerName) || "Connection".equalsIgnoreCase(headerName) || "Keep-Alive".equalsIgnoreCase(headerName)) continue;
+                    String value = response.header(headerName);
+                    if (value != null) headers.put(headerName, value);
+                }
+                return new Object[]{response.code(), response.header("Content-Type", "application/octet-stream"), body == null ? new java.io.ByteArrayInputStream(new byte[0]) : body.byteStream(), headers};
+            } catch (Throwable e) {
+                response.close();
+                throw e;
+            }
+        }
         Method method = recent != null ? methods.get(recent) : null;
         Object[] result = proxyInvoke(method, params);
         if (result != null) return result;
         return tryOthers(params);
+    }
+
+    private static String toJson(Map<String, String> map) {
+        org.json.JSONObject object = new org.json.JSONObject();
+        if (map != null) for (Map.Entry<String, String> entry : map.entrySet()) try { object.put(entry.getKey(), entry.getValue()); } catch (Exception ignored) {}
+        return object.toString();
+    }
+
+    private static String toNestedJson(Map<String, HashMap<String, String>> map) {
+        org.json.JSONObject object = new org.json.JSONObject();
+        if (map != null) for (Map.Entry<String, HashMap<String, String>> entry : map.entrySet()) {
+            org.json.JSONObject inner = new org.json.JSONObject();
+            for (Map.Entry<String, String> sub : entry.getValue().entrySet()) try { inner.put(sub.getKey(), sub.getValue()); } catch (Exception ignored) {}
+            try { object.put(entry.getKey(), inner); } catch (Exception ignored) {}
+        }
+        return object.toString();
     }
 
     private Object[] tryOthers(Map<String, String> p) {

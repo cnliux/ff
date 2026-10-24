@@ -33,6 +33,7 @@ import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 public class Setting {
 
@@ -371,6 +372,90 @@ public class Setting {
         LinkedHashSet<String> result = new LinkedHashSet<>();
         if (keys != null) for (String key : keys) if (key != null && !key.trim().isEmpty()) result.add(key.trim());
         Prefers.put("csp_warmup_sites", App.gson().toJson(result));
+    }
+
+    /**
+     * 爬虫 jar 进程隔离开关：开启后第三方 jar 的类加载与执行移入 :spider 子进程，
+     * 防止 jar 调用 System.exit 杀死宿主。默认关闭，关闭时行为与原路径完全一致。
+     */
+    public static boolean isSpiderIsolation() {
+        return Prefers.getBoolean("spider_isolation");
+    }
+
+    public static void putSpiderIsolation(boolean isolation) {
+        Prefers.put("spider_isolation", isolation);
+    }
+
+    private static final Type SPIDER_DEATHS_TYPE = new TypeToken<Map<String, List<Long>>>() {}.getType();
+    private static final Type SPIDER_QUARANTINE_TYPE = new TypeToken<Map<String, Long>>() {}.getType();
+    private static final long SPIDER_DEATH_WINDOW_MS = 10 * 60 * 1000L;
+    private static final long SPIDER_QUARANTINE_MS = 24 * 60 * 60 * 1000L;
+    private static final int SPIDER_DEATH_THRESHOLD = 3;
+
+    /**
+     * 记录一次归因到 jarKey 的子进程死亡：10 分钟滚动窗口内 ≥3 次 → 隔离该 jar 24 小时。
+     */
+    public static void addSpiderJarDeath(String jarKey) {
+        if (jarKey == null || jarKey.isEmpty()) return;
+        try {
+            long now = System.currentTimeMillis();
+            Map<String, List<Long>> deaths = loadSpiderDeaths();
+            List<Long> list = deaths.get(jarKey);
+            if (list == null) list = new ArrayList<>();
+            list.add(now);
+            list.removeIf(t -> t == null || now - t > SPIDER_DEATH_WINDOW_MS);
+            Map<String, Long> quarantine = loadSpiderQuarantine();
+            if (list.size() >= SPIDER_DEATH_THRESHOLD) {
+                quarantine.put(jarKey, now + SPIDER_QUARANTINE_MS);
+                deaths.remove(jarKey);
+                SpiderDebug.log("spider-proc", "jar quarantined 24h key=%s deaths=%s", jarKey, list.size());
+            } else {
+                deaths.put(jarKey, list);
+            }
+            Prefers.put("spider_jar_deaths", App.gson().toJson(deaths, SPIDER_DEATHS_TYPE));
+            Prefers.put("spider_jar_quarantine", App.gson().toJson(quarantine, SPIDER_QUARANTINE_TYPE));
+        } catch (Throwable ignored) {
+        }
+    }
+
+    public static boolean isSpiderQuarantined(String jarKey) {
+        if (jarKey == null || jarKey.isEmpty()) return false;
+        try {
+            Map<String, Long> quarantine = loadSpiderQuarantine();
+            Long until = quarantine.get(jarKey);
+            if (until == null) return false;
+            if (until <= System.currentTimeMillis()) {
+                quarantine.remove(jarKey);
+                Prefers.put("spider_jar_quarantine", App.gson().toJson(quarantine, SPIDER_QUARANTINE_TYPE));
+                return false;
+            }
+            return true;
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    public static void clearSpiderQuarantine() {
+        Prefers.remove("spider_jar_quarantine");
+        Prefers.remove("spider_jar_deaths");
+    }
+
+    private static Map<String, List<Long>> loadSpiderDeaths() {
+        try {
+            Map<String, List<Long>> map = App.gson().fromJson(Prefers.getString("spider_jar_deaths"), SPIDER_DEATHS_TYPE);
+            return map == null ? new java.util.HashMap<>() : map;
+        } catch (Throwable e) {
+            return new java.util.HashMap<>();
+        }
+    }
+
+    private static Map<String, Long> loadSpiderQuarantine() {
+        try {
+            Map<String, Long> map = App.gson().fromJson(Prefers.getString("spider_jar_quarantine"), SPIDER_QUARANTINE_TYPE);
+            return map == null ? new java.util.HashMap<>() : map;
+        } catch (Throwable e) {
+            return new java.util.HashMap<>();
+        }
     }
 
     /**

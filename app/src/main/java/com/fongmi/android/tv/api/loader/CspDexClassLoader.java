@@ -2,11 +2,11 @@ package com.fongmi.android.tv.api.loader;
 
 import dalvik.system.DexClassLoader;
 
-final class CspDexClassLoader extends DexClassLoader {
+public final class CspDexClassLoader extends DexClassLoader {
 
     private final boolean jarContainsProtobuf;
 
-    CspDexClassLoader(String dexPath, String optimizedDirectory, String librarySearchPath, ClassLoader parent, boolean jarContainsProtobuf) {
+    public CspDexClassLoader(String dexPath, String optimizedDirectory, String librarySearchPath, ClassLoader parent, boolean jarContainsProtobuf) {
         super(dexPath, optimizedDirectory, librarySearchPath, parent);
         this.jarContainsProtobuf = jarContainsProtobuf;
     }

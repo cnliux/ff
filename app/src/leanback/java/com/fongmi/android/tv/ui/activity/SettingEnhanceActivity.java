@@ -17,6 +17,7 @@ import com.fongmi.android.tv.gitcloud.GitCloudAccountStore;
 import com.fongmi.android.tv.setting.CustomCspSetting;
 import com.fongmi.android.tv.setting.ProxySetting;
 import com.fongmi.android.tv.setting.SiteHealthStore;
+import com.fongmi.android.tv.spider.SpiderProcessManager;
 import com.fongmi.android.tv.ui.base.BaseActivity;
 import com.fongmi.android.tv.ui.dialog.CspWarmupDialog;
 import com.fongmi.android.tv.ui.dialog.CustomCspDialog;
@@ -68,6 +69,8 @@ public class SettingEnhanceActivity extends BaseActivity {
         mBinding.gitCloud.setOnClickListener(view -> GitCloudDialog.show(this, this::setText));
         mBinding.webHomeFullscreen.setOnClickListener(this::setWebHomeFullscreen);
         mBinding.cspWarmup.setOnClickListener(this::setCspWarmup);
+        mBinding.spiderIsolation.setOnClickListener(this::setSpiderIsolation);
+        mBinding.spiderIsolation.setOnLongClickListener(this::clearSpiderQuarantine);
         mBinding.playbackArtworkWall.setOnClickListener(this::setPlaybackArtworkWall);
         mBinding.familyFilter.setOnClickListener(this::setFamilyFilter);
         mBinding.viewingRecordSync.setOnClickListener(view -> ViewingRecordSyncDialog.show(this, this::setText));
@@ -88,6 +91,7 @@ public class SettingEnhanceActivity extends BaseActivity {
         mBinding.webHomeExtensionText.setText(getSwitch(Setting.isWebHomeExtension()) + " · " + webHomeExtension.readyCount + "/" + webHomeExtension.installedCount);
         mBinding.webHomeFullscreenText.setText(getSwitch(Setting.isWebHomeFullscreen()));
         mBinding.cspWarmupText.setText(getCspWarmupText());
+        mBinding.spiderIsolationText.setText(getSwitch(Setting.isSpiderIsolation()));
         mBinding.playbackArtworkWallText.setText(getSwitch(Setting.isPlaybackArtworkWall()));
         mBinding.familyFilterText.setText(Setting.isFamilyFilter() ? getString(R.string.setting_family_filter_summary_on, FamilyFilter.keywords().size()) : getString(R.string.setting_family_filter_summary_off));
         mBinding.viewingRecordSyncText.setText(ViewingRecordSyncStore.summary(this));
@@ -126,6 +130,20 @@ public class SettingEnhanceActivity extends BaseActivity {
 
     private void setCspWarmup(View view) {
         CspWarmupDialog.show(this, this::setText);
+    }
+
+    private void setSpiderIsolation(View view) {
+        boolean isolation = !Setting.isSpiderIsolation();
+        Setting.putSpiderIsolation(isolation);
+        if (!isolation) SpiderProcessManager.get().shutdownAll();
+        mBinding.spiderIsolationText.setText(getSwitch(isolation));
+        Notify.show(R.string.setting_spider_isolation_reapply);
+    }
+
+    private boolean clearSpiderQuarantine(View view) {
+        Setting.clearSpiderQuarantine();
+        Notify.show(R.string.setting_spider_quarantine_cleared);
+        return true;
     }
 
     private void setPlaybackArtworkWall(View view) {
